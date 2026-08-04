@@ -12,6 +12,7 @@ import (
 	"github.com/rinat1313/analizator_zakupok/internal/analyzer"
 	"github.com/rinat1313/analizator_zakupok/internal/api"
 	"github.com/rinat1313/analizator_zakupok/internal/config"
+	"github.com/rinat1313/analizator_zakupok/internal/lmpool"
 	"github.com/rinat1313/analizator_zakupok/internal/lmstudio"
 	"github.com/rinat1313/analizator_zakupok/internal/store"
 )
@@ -28,7 +29,7 @@ func main() {
 	}
 	defer st.Close()
 
-	llm := lmstudio.New(lmstudio.Options{
+	pool, err := lmpool.Load(os.Getenv("LM_STUDIO_ENDPOINTS_FILE"), lmstudio.Options{
 		BaseURL:     cfg.LMStudioBaseURL,
 		APIKey:      cfg.LMStudioAPIKey,
 		Model:       cfg.LMStudioModel,
@@ -36,9 +37,17 @@ func main() {
 		Temperature: cfg.Temperature,
 		MaxTokens:   cfg.MaxTokens,
 	})
+	if err != nil {
+		log.Fatalf("lmpool: %v", err)
+	}
 
-	svc := analyzer.New(cfg, llm, st)
-	srv := api.New(cfg, svc, st, llm)
+	runCtx, runCancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer runCancel()
+	pool.StartHealth(runCtx)
+	log.Printf("lmpool: max_parallel=%d status=%+v", pool.MaxParallel(), pool.Status())
+
+	svc := analyzer.New(cfg, pool, st)
+	srv := api.New(cfg, svc, st, pool)
 
 	httpSrv := &http.Server{
 		Addr:              cfg.HTTPAddr,
@@ -47,16 +56,14 @@ func main() {
 	}
 
 	go func() {
-	log.Printf("analizator_zakupok listening on %s (tenders=%s lm=%s model=%s)",
-		cfg.HTTPAddr, cfg.TendersRoot, cfg.LMStudioBaseURL, cfg.LMStudioModel)
+		log.Printf("analizator_zakupok listening on %s (tenders=%s lm_pool=%d model=%s)",
+			cfg.HTTPAddr, cfg.TendersRoot, pool.Status().Total, pool.Model())
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("http: %v", err)
 		}
 	}()
 
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-	<-stop
+	<-runCtx.Done()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
