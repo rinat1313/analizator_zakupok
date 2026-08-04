@@ -1,0 +1,29 @@
+# HTTP examples for analizator_zakupok
+
+### Health
+GET http://127.0.0.1:8088/health
+
+### List checklists
+GET http://127.0.0.1:8088/api/v1/checklists
+
+### Analyze tender from ZakupkiParser result/
+POST http://127.0.0.1:8088/api/v1/analyze
+Content-Type: application/json
+
+{
+  "reg_number": "0334500000125000001",
+  "checklist_id": "default"
+}
+
+### Analyze free text
+POST http://127.0.0.1:8088/api/v1/analyze
+Content-Type: application/json
+
+{
+  "title": "Поставка бумаги А4",
+  "checklist_id": "quick",
+  "text": "Извещение о закупке. Предмет: бумага офисная А4 80 г/м2. НМЦК: 500 000 руб. Срок подачи заявок: 5 рабочих дней. Обеспечение заявки: 5%. Требуется опыт исполнения 3 контрактов за последние 3 года."
+}
+
+### Get analysis
+GET http://127.0.0.1:8088/api/v1/analysis/0334500000125000001
