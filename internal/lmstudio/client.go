@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -22,10 +23,10 @@ type Client struct {
 	temperature float64
 	maxTokens   int
 
-	pingMu   sync.Mutex
-	pingAt   time.Time
-	pingErr  error
-	pingTTL  time.Duration
+	pingMu  sync.Mutex
+	pingAt  time.Time
+	pingErr error
+	pingTTL time.Duration
 }
 
 type Options struct {
@@ -66,11 +67,12 @@ type Message struct {
 }
 
 type chatRequest struct {
-	Model       string    `json:"model"`
-	Messages    []Message `json:"messages"`
-	Temperature float64   `json:"temperature"`
-	MaxTokens   int       `json:"max_tokens,omitempty"`
-	Stream      bool      `json:"stream"`
+	Model              string         `json:"model"`
+	Messages           []Message      `json:"messages"`
+	Temperature        float64        `json:"temperature"`
+	MaxTokens          int            `json:"max_tokens,omitempty"`
+	Stream             bool           `json:"stream"`
+	ChatTemplateKwargs map[string]any `json:"chat_template_kwargs,omitempty"`
 }
 
 type chatResponse struct {
@@ -79,8 +81,9 @@ type chatResponse struct {
 	Choices []struct {
 		Index   int `json:"index"`
 		Message struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
+			Role             string `json:"role"`
+			Content          string `json:"content"`
+			ReasoningContent string `json:"reasoning_content"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
@@ -88,24 +91,38 @@ type chatResponse struct {
 		Message string `json:"message"`
 		Type    string `json:"type"`
 	} `json:"error,omitempty"`
+	Usage *struct {
+		CompletionTokens int `json:"completion_tokens"`
+		CompletionTokensDetails *struct {
+			ReasoningTokens int `json:"reasoning_tokens"`
+		} `json:"completion_tokens_details"`
+	} `json:"usage,omitempty"`
 }
+
+var thinkBlockRe = regexp.MustCompile(`(?is)<think>.*?</think>`)
 
 // Chat отправляет сообщения в LM Studio и возвращает текст ответа.
 func (c *Client) Chat(ctx context.Context, messages []Message) (string, string, error) {
 	return c.ChatMaxTokens(ctx, messages, c.maxTokens)
 }
 
-// ChatMaxTokens — Chat с переопределением max_tokens (короткие ответы на порции).
+// ChatMaxTokens — Chat с переопределением max_tokens.
+// Для Qwen3: пытаемся выключить thinking и читаем reasoning_content, если content пуст.
 func (c *Client) ChatMaxTokens(ctx context.Context, messages []Message, maxTokens int) (string, string, error) {
 	if maxTokens <= 0 {
 		maxTokens = c.maxTokens
 	}
+	msgs := withNoThinkPrefill(messages)
 	reqBody := chatRequest{
 		Model:       c.model,
-		Messages:    messages,
+		Messages:    msgs,
 		Temperature: c.temperature,
 		MaxTokens:   maxTokens,
 		Stream:      false,
+		// LM Studio / Qwen: выключить thinking, иначе весь max_tokens уходит в reasoning.
+		ChatTemplateKwargs: map[string]any{
+			"enable_thinking": false,
+		},
 	}
 	raw, err := json.Marshal(reqBody)
 	if err != nil {
@@ -118,7 +135,7 @@ func (c *Client) ChatMaxTokens(ctx context.Context, messages []Message, maxToken
 		switch m.Role {
 		case "system":
 			sysLen += n
-		default:
+		case "user":
 			userLen += n
 		}
 	}
@@ -159,11 +176,72 @@ func (c *Client) ChatMaxTokens(ctx context.Context, messages []Message, maxToken
 	if len(parsed.Choices) == 0 {
 		return "", "", fmt.Errorf("lm studio: empty choices")
 	}
+	msg := parsed.Choices[0].Message
+	content := ExtractAssistantText(msg.Content, msg.ReasoningContent)
+	if content == "" {
+		reasonTok := 0
+		if parsed.Usage != nil && parsed.Usage.CompletionTokensDetails != nil {
+			reasonTok = parsed.Usage.CompletionTokensDetails.ReasoningTokens
+		}
+		log.Printf("lmstudio warn: empty assistant text (finish=%s reasoning_tokens=%d content_len=%d reasoning_len=%d)",
+			parsed.Choices[0].FinishReason, reasonTok, len(msg.Content), len(msg.ReasoningContent))
+		return "", "", fmt.Errorf("lm studio: empty content (Qwen thinking съел max_tokens=%d; увеличьте DOSE_MAX_TOKENS или отключите thinking в LM Studio)", maxTokens)
+	}
 	model := parsed.Model
 	if model == "" {
 		model = c.model
 	}
-	return strings.TrimSpace(parsed.Choices[0].Message.Content), model, nil
+	return content, model, nil
+}
+
+// ExtractAssistantText достаёт полезный ответ из content / reasoning_content / think-блоков.
+func ExtractAssistantText(content, reasoning string) string {
+	content = strings.TrimSpace(content)
+	reasoning = strings.TrimSpace(reasoning)
+	if content != "" {
+		stripped := stripThink(content)
+		if stripped != "" {
+			return stripped
+		}
+	}
+	if reasoning != "" {
+		stripped := stripThink(reasoning)
+		if stripped != "" {
+			return stripped
+		}
+		return reasoning
+	}
+	return ""
+}
+
+func stripThink(s string) string {
+	s = thinkBlockRe.ReplaceAllString(s, "")
+	// незакрытый think в начале
+	if i := strings.Index(strings.ToLower(s), "</think>"); i >= 0 {
+		s = s[i+len("</think>"):]
+	}
+	return strings.TrimSpace(s)
+}
+
+// withNoThinkPrefill — workaround для Qwen3 в LM Studio: закрытый think в assistant
+// часто отключает фазу рассуждений, иначе content пустой.
+func withNoThinkPrefill(messages []Message) []Message {
+	out := make([]Message, 0, len(messages)+2)
+	out = append(out, messages...)
+	// Маркер /no_think в конце user (Qwen3).
+	for i := len(out) - 1; i >= 0; i-- {
+		if out[i].Role == "user" {
+			if !strings.Contains(out[i].Content, "/no_think") {
+				out[i].Content = strings.TrimSpace(out[i].Content) + "\n\n/no_think"
+			}
+			break
+		}
+	}
+	out = append(out, Message{
+		Role:    "assistant",
+		Content: "<think>\n\n</think>\n\n",
+	})
+	return out
 }
 
 // IsContextExceeded — ответ LM Studio про переполнение контекста.
@@ -178,8 +256,7 @@ func IsContextExceeded(err error) bool {
 		(strings.Contains(low, "exceeded") && strings.Contains(low, "context"))
 }
 
-// Ping проверяет /models. Результат кэшируется, чтобы Docker healthcheck
-// не долбил LM Studio каждые 10с (в логах это выглядело как «странные» GET).
+// Ping проверяет /models. Результат кэшируется.
 func (c *Client) Ping(ctx context.Context) error {
 	c.pingMu.Lock()
 	defer c.pingMu.Unlock()
