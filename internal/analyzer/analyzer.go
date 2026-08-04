@@ -10,6 +10,7 @@ import (
 
 	"github.com/rinat1313/analizator_zakupok/internal/config"
 	"github.com/rinat1313/analizator_zakupok/internal/lmstudio"
+	"github.com/rinat1313/analizator_zakupok/internal/progress"
 	"github.com/rinat1313/analizator_zakupok/internal/prompt"
 	"github.com/rinat1313/analizator_zakupok/internal/store"
 )
@@ -19,10 +20,11 @@ const FocusQuestion = "Оцени закупку по возможности у�
 
 // Service оркестрирует дозированный анализ → краткие ответы → итоговый синтез.
 type Service struct {
-	cfg     config.Config
-	llm     *lmstudio.Client
-	store   *store.Store
-	prompts prompt.Bundle
+	cfg      config.Config
+	llm      *lmstudio.Client
+	store    *store.Store
+	prompts  prompt.Bundle
+	progress *progress.Tracker
 }
 
 func New(cfg config.Config, llm *lmstudio.Client, st *store.Store) *Service {
@@ -31,15 +33,21 @@ func New(cfg config.Config, llm *lmstudio.Client, st *store.Store) *Service {
 		log.Printf("prompts warn: %v (using built-in defaults)", err)
 		prompts, _ = prompt.Load("")
 	}
-	return &Service{cfg: cfg, llm: llm, store: st, prompts: prompts}
+	return &Service{cfg: cfg, llm: llm, store: st, prompts: prompts, progress: progress.New()}
 }
+
+func (s *Service) Progress() *progress.Tracker { return s.progress }
 
 // Request вход анализа.
 type Request struct {
-	RegNumber   string `json:"reg_number"`
-	Text        string `json:"text"`
-	ChecklistID string `json:"checklist_id"`
-	Title       string `json:"title"`
+	RegNumber    string `json:"reg_number"`
+	Text         string `json:"text"`
+	ChecklistID  string `json:"checklist_id"`
+	Title        string `json:"title"`
+	ConfigName   string `json:"config_name"`
+	SystemPrompt string `json:"system_prompt"`
+	UserPrompt   string `json:"user_prompt"`
+	Rules        string `json:"rules"`
 }
 
 type doseBrief struct {
@@ -84,13 +92,28 @@ func (s *Service) Analyze(ctx context.Context, req Request) (*store.AnalysisResu
 	}
 
 	started := time.Now().UTC().Format(time.RFC3339)
+	focus := FocusQuestion
+	if strings.TrimSpace(req.UserPrompt) != "" {
+		focus = strings.TrimSpace(req.UserPrompt)
+	}
+	checklistID := "samozanyaty-dosed"
+	if strings.TrimSpace(req.ChecklistID) != "" {
+		checklistID = strings.TrimSpace(req.ChecklistID)
+	}
+	checklistName := focus
+	if strings.TrimSpace(req.ConfigName) != "" {
+		checklistName = strings.TrimSpace(req.ConfigName)
+	}
 	pending := &store.AnalysisResult{
 		RegNumber:     id,
 		Status:        "running",
-		ChecklistID:   "samozanyaty-dosed",
-		ChecklistName: FocusQuestion,
+		ChecklistID:   checklistID,
+		ChecklistName: checklistName,
 		StartedAt:     started,
 	}
+
+	s.progress.Set(id, progress.Info{Percent: 3, Phase: "prepare"})
+	defer s.progress.Clear(id)
 
 	var law, title string
 	var sourceNames []string
@@ -148,12 +171,28 @@ func (s *Service) Analyze(ctx context.Context, req Request) (*store.AnalysisResu
 	if len(doses) == 0 {
 		return s.fail(ctx, pending, fmt.Errorf("не удалось нарезать текст на порции"))
 	}
-	log.Printf("analyze %s: corpus_runes≈%d doses=%d page=%d budget=%d sources=%v focus=%q",
-		id, len([]rune(corpus)), len(doses), plan.PageChars, plan.BudgetChars, sourceNames, FocusQuestion)
+	log.Printf("analyze %s: corpus_runes≈%d doses=%d page=%d budget=%d sources=%v focus=%q config=%q",
+		id, len([]rune(corpus)), len(doses), plan.PageChars, plan.BudgetChars, sourceNames, focus, req.ConfigName)
+
+	doseSystem := s.prompts.DoseSystem
+	if strings.TrimSpace(req.SystemPrompt) != "" {
+		doseSystem = strings.TrimSpace(req.SystemPrompt)
+		if strings.TrimSpace(req.Rules) != "" {
+			doseSystem += "\n\nПравила:\n" + strings.TrimSpace(req.Rules)
+		}
+	} else if strings.TrimSpace(req.Rules) != "" {
+		doseSystem += "\n\nПравила:\n" + strings.TrimSpace(req.Rules)
+	}
 
 	briefs := make([]doseBrief, 0, len(doses))
 	for _, d := range doses {
-		brief, err := s.analyzeDose(ctx, title, id, law, d)
+		s.progress.Set(id, progress.Info{
+			Percent:    progress.DosePct(d.Index-1, len(doses)),
+			DosesDone:  d.Index - 1,
+			DosesTotal: len(doses),
+			Phase:      "dose",
+		})
+		brief, err := s.analyzeDose(ctx, title, id, law, d, focus, doseSystem)
 		if err != nil {
 			return s.fail(ctx, pending, fmt.Errorf("%s: %w", doseLabel(d), err))
 		}
@@ -161,11 +200,18 @@ func (s *Service) Analyze(ctx context.Context, req Request) (*store.AnalysisResu
 			pending.Model = brief.Model
 		}
 		briefs = append(briefs, brief)
+		s.progress.Set(id, progress.Info{
+			Percent:    progress.DosePct(d.Index, len(doses)),
+			DosesDone:  d.Index,
+			DosesTotal: len(doses),
+			Phase:      "dose",
+		})
 		log.Printf("analyze %s: %s status=%s score=%.2f runes=%d",
 			id, doseLabel(d), brief.Status, brief.Score, brief.RuneCount)
 	}
 
-	synth, model, err := s.synthesizeDoses(ctx, title, id, law, briefs)
+	s.progress.Set(id, progress.Info{Percent: 92, DosesDone: len(doses), DosesTotal: len(doses), Phase: "synthesize"})
+	synth, model, err := s.synthesizeDoses(ctx, title, id, law, briefs, focus, doseSystem)
 	if err != nil {
 		log.Printf("synthesize warn: %v", err)
 		synth = fallbackFromBriefs(briefs)
@@ -202,13 +248,15 @@ func (s *Service) Analyze(ctx context.Context, req Request) (*store.AnalysisResu
 	pending.RawSynthesize = synth.Raw
 	pending.Error = ""
 
+	s.progress.Set(id, progress.Info{Percent: 100, DosesDone: len(doses), DosesTotal: len(doses), Phase: "done"})
+
 	if err := s.store.SaveAnalysis(ctx, pending); err != nil {
 		return nil, err
 	}
 	return pending, nil
 }
 
-func (s *Service) analyzeDose(ctx context.Context, title, reg, law string, d Dose) (doseBrief, error) {
+func (s *Service) analyzeDose(ctx context.Context, title, reg, law string, d Dose, focus, doseSystem string) (doseBrief, error) {
 	text := d.Text
 	var lastErr error
 	for attempt := 0; attempt < 4; attempt++ {
@@ -219,9 +267,13 @@ func (s *Service) analyzeDose(ctx context.Context, title, reg, law string, d Dos
 			}
 			log.Printf("dose %d/%d shrink attempt=%d runes=%d", d.Index, d.Total, attempt, utf8Len(text))
 		}
-		user := buildDoseUser(title, reg, law, d, text)
+		user := buildDoseUser(title, reg, law, d, text, focus)
+		sys := doseSystem
+		if sys == "" {
+			sys = s.prompts.DoseSystem
+		}
 		content, model, err := s.llm.ChatMaxTokens(ctx, []lmstudio.Message{
-			{Role: "system", Content: s.prompts.DoseSystem},
+			{Role: "system", Content: sys},
 			{Role: "user", Content: user},
 		}, s.cfg.DoseMaxTokens)
 		if err != nil {
@@ -264,37 +316,48 @@ func (s *Service) analyzeDose(ctx context.Context, title, reg, law string, d Dos
 	return doseBrief{}, lastErr
 }
 
-func buildDoseUser(title, reg, law string, d Dose, text string) string {
+func buildDoseUser(title, reg, law string, d Dose, text, focus string) string {
+	if focus == "" {
+		focus = FocusQuestion
+	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "Целевой вопрос анализа: %s\n", FocusQuestion)
+	fmt.Fprintf(&b, "Целевой вопрос анализа: %s\n", focus)
 	fmt.Fprintf(&b, "Тендер: %s\nРегномер: %s\nЗакон: %s\n", title, reg, law)
 	fmt.Fprintf(&b, "Порция: %d из %d\n", d.Index, d.Total)
 	fmt.Fprintf(&b, "Страницы текста (примерно): %d–%d\n", d.PageFrom, d.PageTo)
 	if d.MoreComing {
 		b.WriteString("ВАЖНО: это НЕ весь документ. После этой порции будут ещё части текста. ")
-		b.WriteString("Не делай итоговый вердикт по участию — только краткие заметки по ЭТОЙ порции. ")
+		b.WriteString("Не делай итоговый вердикт — только краткие заметки по ЭТОЙ порции. ")
 		b.WriteString("Запомни: полный вывод будет позже по сумме всех порций.\n")
 	} else {
 		b.WriteString("ДОКУМЕНТЫ ЗАКОНЧИЛИСЬ: это последняя порция текста по закупке. ")
-		b.WriteString("Дай краткие заметки только по ней. Итоговый ответ «да/нет и почему» будет отдельным шагом после всех порций.\n")
+		b.WriteString("Дай краткие заметки только по ней. Итоговый ответ будет отдельным шагом после всех порций.\n")
 	}
 	b.WriteString("\n--- ТЕКСТ ПОРЦИИ ---\n")
 	b.WriteString(text)
 	return b.String()
 }
 
-func (s *Service) synthesizeDoses(ctx context.Context, title, reg, law string, briefs []doseBrief) (synthResult, string, error) {
+func (s *Service) synthesizeDoses(ctx context.Context, title, reg, law string, briefs []doseBrief, focus, systemExtra string) (synthResult, string, error) {
+	if focus == "" {
+		focus = FocusQuestion
+	}
 	var user strings.Builder
-	fmt.Fprintf(&user, "Целевой вопрос: %s\n", FocusQuestion)
+	fmt.Fprintf(&user, "Целевой вопрос: %s\n", focus)
 	fmt.Fprintf(&user, "Тендер: %s\nРегномер: %s\nЗакон: %s\n", title, reg, law)
 	user.WriteString("ДОКУМЕНТЫ ЗАКОНЧИЛИСЬ. Все порции текста переданы. ")
-	user.WriteString("Сформируй итоговый ответ: да или нет (может ли / целесообразно ли самозанятому участвовать) и почему. ")
+	user.WriteString("Сформируй итоговый ответ по целевому вопросу (да / нет / с оговорками) и почему. ")
 	user.WriteString("Ниже — краткие заметки модели по каждой порции документов (не сырой текст).\n\n")
 	raw, _ := json.MarshalIndent(briefsForSynth(briefs), "", "  ")
 	user.Write(raw)
 
+	sys := s.prompts.SynthesizeSystem
+	if strings.TrimSpace(systemExtra) != "" {
+		sys = systemExtra + "\n\n" + s.prompts.SynthesizeSystem
+	}
+
 	content, model, err := s.llm.ChatMaxTokens(ctx, []lmstudio.Message{
-		{Role: "system", Content: s.prompts.SynthesizeSystem},
+		{Role: "system", Content: sys},
 		{Role: "user", Content: user.String()},
 	}, s.cfg.SynthMaxTokens)
 	if err != nil {
