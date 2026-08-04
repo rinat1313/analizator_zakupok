@@ -37,6 +37,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /health", s.handleHealth)
 	s.mux.HandleFunc("GET /api/v1/checklists", s.handleListChecklists)
 	s.mux.HandleFunc("POST /api/v1/analyze", s.handleAnalyze)
+	s.mux.HandleFunc("POST /api/v1/lm/smoke", s.handleLMSmoke)
 	s.mux.HandleFunc("GET /api/v1/analysis/{reg}", s.handleGetAnalysis)
 }
 
@@ -45,14 +46,23 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"status":       "ok",
 		"service":      "analizator_zakupok",
 		"tenders_root": s.cfg.TendersRoot,
+		"lm_base_url":  s.cfg.LMStudioBaseURL,
+		"lm_model":     s.cfg.LMStudioModel,
 		"time":         time.Now().UTC().Format(time.RFC3339),
 	}
-	ctx := r.Context()
-	if err := s.llm.Ping(ctx); err != nil {
-		status["lm_studio"] = "unavailable"
-		status["lm_studio_error"] = err.Error()
+	// По умолчанию НЕ дергаем LM Studio на каждый Docker healthcheck.
+	// Глубокая проверка: GET /health?lm=1
+	if r.URL.Query().Get("lm") == "1" || r.URL.Query().Get("deep") == "1" {
+		ctx := r.Context()
+		if err := s.llm.Ping(ctx); err != nil {
+			status["lm_studio"] = "unavailable"
+			status["lm_studio_error"] = err.Error()
+		} else {
+			status["lm_studio"] = "ok"
+		}
 	} else {
-		status["lm_studio"] = "ok"
+		status["lm_studio"] = "skipped"
+		status["lm_studio_hint"] = "use GET /health?lm=1 to probe LM Studio"
 	}
 	writeJSON(w, http.StatusOK, status)
 }
@@ -79,9 +89,10 @@ func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("analyze start reg=%q checklist=%q text_len=%d", req.RegNumber, req.ChecklistID, len(req.Text))
+	log.Printf("analyze start reg=%q checklist=%q text_len=%d title=%q", req.RegNumber, req.ChecklistID, len(req.Text), req.Title)
 	res, err := s.svc.Analyze(r.Context(), req)
 	if err != nil {
+		log.Printf("analyze end reg=%q err=%v", req.RegNumber, err)
 		if res != nil {
 			writeJSON(w, http.StatusOK, res) // статус failed уже в теле
 			return
@@ -89,7 +100,33 @@ func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	log.Printf("analyze end reg=%q status=%s recommendation=%s doses=%d", req.RegNumber, res.Status, res.Recommendation, res.ChunksUsed)
 	writeJSON(w, http.StatusOK, res)
+}
+
+// handleLMSmoke — один короткий chat/completions, чтобы проверить что LM Studio получает POST.
+func (s *Server) handleLMSmoke(w http.ResponseWriter, r *http.Request) {
+	content, model, err := s.llm.ChatMaxTokens(r.Context(), []lmstudio.Message{
+		{Role: "system", Content: "Ответь одним словом."},
+		{Role: "user", Content: "Скажи: ок"},
+	}, 32)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{
+			"ok":      false,
+			"error":   err.Error(),
+			"lm_url":  s.cfg.LMStudioBaseURL,
+			"model":   s.cfg.LMStudioModel,
+			"expect":  "в логе LM Studio должен появиться POST /v1/chat/completions",
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":      true,
+		"model":   model,
+		"reply":   content,
+		"lm_url":  s.cfg.LMStudioBaseURL,
+		"expect":  "в логе LM Studio был POST /v1/chat/completions",
+	})
 }
 
 func (s *Server) handleGetAnalysis(w http.ResponseWriter, r *http.Request) {

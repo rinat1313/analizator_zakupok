@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -19,6 +21,11 @@ type Client struct {
 	httpClient  *http.Client
 	temperature float64
 	maxTokens   int
+
+	pingMu   sync.Mutex
+	pingAt   time.Time
+	pingErr  error
+	pingTTL  time.Duration
 }
 
 type Options struct {
@@ -43,11 +50,15 @@ func New(opt Options) *Client {
 		model:       opt.Model,
 		temperature: opt.Temperature,
 		maxTokens:   opt.MaxTokens,
+		pingTTL:     60 * time.Second,
 		httpClient: &http.Client{
 			Timeout: opt.Timeout,
 		},
 	}
 }
+
+func (c *Client) Model() string   { return c.model }
+func (c *Client) BaseURL() string { return c.baseURL }
 
 type Message struct {
 	Role    string `json:"role"`
@@ -101,6 +112,19 @@ func (c *Client) ChatMaxTokens(ctx context.Context, messages []Message, maxToken
 		return "", "", err
 	}
 
+	sysLen, userLen := 0, 0
+	for _, m := range messages {
+		n := len([]rune(m.Content))
+		switch m.Role {
+		case "system":
+			sysLen += n
+		default:
+			userLen += n
+		}
+	}
+	log.Printf("lmstudio → POST %s/chat/completions model=%s max_tokens=%d sys_runes=%d user_runes=%d body_bytes=%d",
+		c.baseURL, c.model, maxTokens, sysLen, userLen, len(raw))
+
 	url := c.baseURL + "/chat/completions"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(raw))
 	if err != nil {
@@ -109,6 +133,7 @@ func (c *Client) ChatMaxTokens(ctx context.Context, messages []Message, maxToken
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 
+	started := time.Now()
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return "", "", fmt.Errorf("lm studio request: %w", err)
@@ -119,6 +144,7 @@ func (c *Client) ChatMaxTokens(ctx context.Context, messages []Message, maxToken
 	if err != nil {
 		return "", "", err
 	}
+	log.Printf("lmstudio ← HTTP %d in %s bytes=%d", resp.StatusCode, time.Since(started).Round(time.Millisecond), len(body))
 	if resp.StatusCode >= 300 {
 		return "", "", fmt.Errorf("lm studio HTTP %d: %s", resp.StatusCode, truncate(string(body), 500))
 	}
@@ -149,11 +175,24 @@ func IsContextExceeded(err error) bool {
 	return strings.Contains(low, "context size") ||
 		strings.Contains(low, "context length") ||
 		strings.Contains(low, "context_length") ||
-		strings.Contains(low, "exceeded") && strings.Contains(low, "context")
+		(strings.Contains(low, "exceeded") && strings.Contains(low, "context"))
 }
 
-// Ping проверяет доступность /models.
+// Ping проверяет /models. Результат кэшируется, чтобы Docker healthcheck
+// не долбил LM Studio каждые 10с (в логах это выглядело как «странные» GET).
 func (c *Client) Ping(ctx context.Context) error {
+	c.pingMu.Lock()
+	defer c.pingMu.Unlock()
+	if c.pingTTL > 0 && time.Since(c.pingAt) < c.pingTTL {
+		return c.pingErr
+	}
+	err := c.pingNow(ctx)
+	c.pingAt = time.Now()
+	c.pingErr = err
+	return err
+}
+
+func (c *Client) pingNow(ctx context.Context) error {
 	url := c.baseURL + "/models"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

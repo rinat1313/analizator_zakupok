@@ -47,8 +47,8 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("analizator_zakupok listening on %s (tenders=%s lm=%s)",
-			cfg.HTTPAddr, cfg.TendersRoot, cfg.LMStudioBaseURL)
+	log.Printf("analizator_zakupok listening on %s (tenders=%s lm=%s model=%s)",
+		cfg.HTTPAddr, cfg.TendersRoot, cfg.LMStudioBaseURL, cfg.LMStudioModel)
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("http: %v", err)
 		}
