@@ -16,11 +16,14 @@ import (
 )
 
 // EndpointConfig — одна LM Studio.
+// Concurrent > 1 создаёт несколько слотов на один base_url
+// (удобно для одного сервера с lms load --parallel N).
 type EndpointConfig struct {
-	Name    string `yaml:"name" json:"name"`
-	BaseURL string `yaml:"base_url" json:"base_url"`
-	APIKey  string `yaml:"api_key" json:"api_key"`
-	Model   string `yaml:"model" json:"model"`
+	Name       string `yaml:"name" json:"name"`
+	BaseURL    string `yaml:"base_url" json:"base_url"`
+	APIKey     string `yaml:"api_key" json:"api_key"`
+	Model      string `yaml:"model" json:"model"`
+	Concurrent int    `yaml:"concurrent" json:"concurrent"`
 }
 
 type FileConfig struct {
@@ -97,10 +100,9 @@ func Load(path string, fallback lmstudio.Options) (*Pool, error) {
 	seen := map[string]bool{}
 	add := func(ep EndpointConfig) {
 		ep.BaseURL = strings.TrimRight(strings.TrimSpace(ep.BaseURL), "/")
-		if ep.BaseURL == "" || seen[ep.BaseURL] {
+		if ep.BaseURL == "" {
 			return
 		}
-		seen[ep.BaseURL] = true
 		if ep.APIKey == "" {
 			ep.APIKey = fallback.APIKey
 		}
@@ -113,18 +115,34 @@ func Load(path string, fallback lmstudio.Options) (*Pool, error) {
 		if ep.Name == "" {
 			ep.Name = ep.BaseURL
 		}
-		cl := lmstudio.New(lmstudio.Options{
-			BaseURL:     ep.BaseURL,
-			APIKey:      ep.APIKey,
-			Model:       ep.Model,
-			Timeout:     p.timeout,
-			Temperature: p.temp,
-			MaxTokens:   p.maxTok,
-		})
-		s := &slot{cfg: ep, client: cl}
-		s.healthy.Store(true) // optimistic until first health fail
-		s.lastErr.Store("")
-		p.slots = append(p.slots, s)
+		n := ep.Concurrent
+		if n < 1 {
+			n = 1
+		}
+		for i := 0; i < n; i++ {
+			key := fmt.Sprintf("%s#%d", ep.BaseURL, i)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			cfg := ep
+			cfg.Concurrent = 1
+			if n > 1 {
+				cfg.Name = fmt.Sprintf("%s-%d", ep.Name, i+1)
+			}
+			cl := lmstudio.New(lmstudio.Options{
+				BaseURL:     cfg.BaseURL,
+				APIKey:      cfg.APIKey,
+				Model:       cfg.Model,
+				Timeout:     p.timeout,
+				Temperature: p.temp,
+				MaxTokens:   p.maxTok,
+			})
+			s := &slot{cfg: cfg, client: cl}
+			s.healthy.Store(true) // optimistic until first health fail
+			s.lastErr.Store("")
+			p.slots = append(p.slots, s)
+		}
 	}
 
 	for _, ep := range fc.Endpoints {

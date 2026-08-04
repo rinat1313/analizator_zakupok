@@ -1,23 +1,34 @@
 # Список доступных LM Studio (OpenAI-compatible /v1).
-# Анализатор проверяет доступность и параллелит AI по числу живых endpoint'ов
+# Анализатор проверяет доступность и параллелит AI по числу живых слотов
 # (не больше ~90% CPU хоста).
 #
-# Переменная LM_STUDIO_ENDPOINTS_FILE может указать другой путь.
-# Если файл пуст/отсутствует — используется LM_STUDIO_BASE_URL из окружения.
+# Источник IP/портов: zakupki-platform/configs/lm_studio_pool.conf
+# Перегенерация: ./up.sh --ai → scripts/lm-studio-start-pool.sh
+#
+# Модель: qwen/qwen3-8b, context 8192, thinking выключен в клиенте
+# (enable_thinking=false + /no_think) и через model.yaml при старте пула.
+#
+# Локальные 127.0.0.1 в conf → host.docker.internal для контейнера analizator.
+# concurrent: N — несколько слотов на один сервер (lms load --parallel N).
 
 endpoints:
-  - base_url: http://127.0.0.1:1234/v1
+  - base_url: http://host.docker.internal:1234/v1
     api_key: lm-studio
     model: qwen/qwen3-8b
-    name: local-1
-  # - base_url: http://192.168.1.20:1234/v1
-  #   api_key: lm-studio
-  #   model: qwen/qwen3-8b
-  #   name: remote-2
-  # - base_url: http://192.168.1.21:1234/v1
-  #   api_key: lm-studio
-  #   model: qwen/qwen3-8b
-  #   name: remote-3
+    name: lm-1
+  - base_url: http://host.docker.internal:1235/v1
+    api_key: lm-studio
+    model: qwen/qwen3-8b
+    name: lm-2
+  - base_url: http://host.docker.internal:1236/v1
+    api_key: lm-studio
+    model: qwen/qwen3-8b
+    name: lm-3
+  - base_url: http://host.docker.internal:1237/v1
+    api_key: lm-studio
+    model: qwen/qwen3-8b
+    name: lm-4
 
-# Как часто перепроверять доступность (секунды).
 health_interval_sec: 15
+context_length: 8192
+thinking: false
