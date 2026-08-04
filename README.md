@@ -58,17 +58,29 @@ docker compose up -d --build
 
 ## Совместно с ZakupkiParser
 
-В репозитории парсера есть корневой `docker-compose.yml`: PostgreSQL + **analizator** + общий volume `DataCode/result`.
+Полный стек (parser + PostgreSQL + analizator) поднимается **из репозитория парсера**, не из этого модуля.
 
-После выгрузки тендера парсером:
+Ветка/PR с готовым `docker-compose.yml`:  
+https://github.com/rinat1313/ZakupkiParser/pull/1
+
+```bash
+git clone https://github.com/rinat1313/ZakupkiParser.git
+cd ZakupkiParser
+git fetch origin pull/1/head:stack && git checkout stack
+
+# LM Studio Local Server :1234, модель загружена
+export LM_STUDIO_MODEL=<id-модели>
+docker compose up -d --build
+docker compose run --rm parser -limit 1 -analyze-url http://analizator:8088
+```
+
+Анализ уже выгруженного тендера:
 
 ```bash
 curl -X POST http://127.0.0.1:8088/api/v1/analyze \
   -H 'Content-Type: application/json' \
   -d '{"reg_number":"<номер>"}'
 ```
-
-Либо флаг парсера `-analyze-url http://analizator:8088` (см. ZakupkiParser).
 
 ## Структура данных тендера
 
