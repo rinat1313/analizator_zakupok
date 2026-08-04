@@ -58,10 +58,15 @@ docker compose up -d --build
 
 ## Совместно с ZakupkiParser
 
-Полный стек (parser + PostgreSQL + analizator) поднимается **из репозитория парсера**, не из этого модуля.
+Рекомендуемый запуск всего стека — из оркестратора **[zakupki-platform](https://github.com/rinat1313/zakupki-platform)**:
 
-Ветка/PR с готовым `docker-compose.yml`:  
-https://github.com/rinat1313/ZakupkiParser/pull/1
+```bash
+cd ../zakupki-platform
+export LM_STUDIO_MODEL=<id>
+make up-ai
+```
+
+Legacy: совместный compose ещё есть в [ZakupkiParser PR #1](https://github.com/rinat1313/ZakupkiParser/pull/1).
 
 ```bash
 git clone https://github.com/rinat1313/ZakupkiParser.git
@@ -157,6 +162,17 @@ YAML в `configs/checklists/`:
 | `GET` | `/api/v1/checklists` | список чек-листов |
 | `POST` | `/api/v1/analyze` | запуск анализа |
 | `GET` | `/api/v1/analysis/{reg}` | получить сохранённый анализ |
+
+## Platform (каталог + UI)
+
+В [ZakupkiParser `platform/`](https://github.com/rinat1313/ZakupkiParser) API может вызывать этот сервис:
+
+```bash
+export ANALIZATOR_URL=http://127.0.0.1:8088
+# platform API: POST /api/v1/tenders/{id}/analyze
+```
+
+Compose profile `ai` в `ZakupkiParser/platform` поднимает analizator рядом с каталогом (см. `platform/docs/HANDOFF.md`).
 
 ## Разработка
 

@@ -199,3 +199,14 @@ CHECKLISTS_DIR=configs/checklists
 PROMPTS_DIR=configs/prompts
 DEFAULT_CHECKLIST=default
 ```
+
+---
+
+## 10. Связка с Zakupki Platform
+
+Platform (`ZakupkiParser/platform`) хранит тексты документов в Postgres и вызывает:
+
+`POST {ANALIZATOR_URL}/api/v1/analyze` с полем `text` (корпус из карточки + documents).
+
+Ответ сохраняется в `tender_assessments`; ручные чек-листы/промпты настраиваются здесь же (§4–5).
+
