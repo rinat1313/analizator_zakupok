@@ -1,11 +1,13 @@
-# Полный стек: PostgreSQL + analizator_zakupok (+ опционально ZakupkiParser).
+# Автономный запуск analizator_zakupok.
 #
-# Быстрый старт:
-#   ./scripts/up.sh
-#   ./scripts/parse.sh 1
+# LM Studio в локальной сети:
+#   export LM_STUDIO_BASE_URL=http://192.168.1.50:1234/v1
+#   export LM_STUDIO_MODEL=<id модели из LM Studio>
+#   docker compose up -d --build
 #
-# LM Studio должен быть запущен (Local Server :1234) с загруженной моделью.
-# Задайте LM_STUDIO_MODEL в .env (см. .env.example / .env.lan.example).
+# LM Studio на том же хосте, что и Docker:
+#   LM_STUDIO_BASE_URL=http://host.docker.internal:1234/v1
+#   (Linux: extra_hosts host.docker.internal уже прописан)
 
 services:
   postgres:
@@ -24,6 +26,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    profiles: ["db"]
 
   analizator:
     build: .
@@ -47,37 +50,15 @@ services:
       CHUNK_OVERLAP: ${CHUNK_OVERLAP:-250}
       MAX_CHUNKS: ${MAX_CHUNKS:-40}
       CONCURRENCY: ${CONCURRENCY:-2}
-      DATABASE_URL: ${DATABASE_URL:-postgres://zakupki:zakupki@postgres:5432/zakupki?sslmode=disable}
+      # Раскомментируйте вместе с profile db:
+      # DATABASE_URL: postgres://zakupki:zakupki@postgres:5432/zakupki?sslmode=disable
     volumes:
-      # По умолчанию — каталог result из клона ZakupkiParser (.deps), см. scripts/up.sh
-      - ${TENDERS_HOST_PATH:-./.deps/ZakupkiParser/DataCode/result}:/data/tenders
+      - ${TENDERS_HOST_PATH:-tenders_data}:/data/tenders
+      # правки чек-листов/промптов без пересборки образа:
       - ./configs:/app/configs:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    depends_on:
-      postgres:
-        condition: service_healthy
-
-  # One-shot парсер. Запуск: ./scripts/parse.sh 1
-  # Требует предварительного ./scripts/up.sh (клонирует ZakupkiParser в .deps/).
-  parser:
-    profiles: ["parser"]
-    build:
-      context: ${PARSER_CONTEXT:-./.deps/ZakupkiParser/DataCode}
-      dockerfile: Dockerfile
-    environment:
-      EIS_INSECURE: "1"
-    volumes:
-      - ${TENDERS_HOST_PATH:-./.deps/ZakupkiParser/DataCode/result}:/app/result
-      - ${PARSER_DATA_PATH:-./.deps/ZakupkiParser/DataCode/data}:/app/data:ro
-    depends_on:
-      - analizator
-    entrypoint: ["/app/parser"]
-    command:
-      - "-result"
-      - "/app/result"
-      - "-analyze-url"
-      - "http://analizator:8088"
 
 volumes:
   pgdata:
+  tenders_data:

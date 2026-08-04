@@ -46,41 +46,21 @@ curl -s -X POST http://127.0.0.1:8088/api/v1/analyze \
 curl -s http://127.0.0.1:8088/api/v1/analysis/0334500000125000001
 ```
 
-## Полный стек (рекомендуется)
-
-Одной командой: **PostgreSQL + analizator + ZakupkiParser** (парсер подтягивается в `.deps/`).
-
-1. Запустите **LM Studio** → Local Server `:1234` → загрузите модель.  
-2. Затем:
-
-```bash
-cp .env.example .env
-# LM_STUDIO_MODEL=<id модели из LM Studio>
-
-./scripts/up.sh          # postgres :5432 + analizator :8088
-./scripts/parse.sh 1     # выгрузка 1 тендера + AI-анализ
-./scripts/down.sh        # остановка
-```
-
-Подробно: [`docs/STACK.md`](docs/STACK.md). Интегратор (LAN, чек-листы, промпты): [`docs/INTEGRATOR.md`](docs/INTEGRATOR.md).
-
-## Только analizator (Docker)
+## Docker
 
 ```bash
 docker compose up -d --build
 ```
 
-Сервис слушает `:8088`. Каталог тендеров по умолчанию — `.deps/ZakupkiParser/DataCode/result` (после `./scripts/up.sh`).
+Сервис слушает `:8088`. Каталог тендеров — volume `tenders_data` (или смонтируйте `../DataCode/result`).
 
 Для доступа к LM Studio на хосте используется `host.docker.internal`.
 
 ## Совместно с ZakupkiParser
 
-Предпочтительный путь — `./scripts/up.sh` + `./scripts/parse.sh` из этого репозитория.
+В репозитории парсера есть корневой `docker-compose.yml`: PostgreSQL + **analizator** + общий volume `DataCode/result`.
 
-В репозитории парсера (ветка `cursor/analizator-zakupok-e602`) также есть корневой `docker-compose.yml` с тем же стеком.
-
-После выгрузки:
+После выгрузки тендера парсером:
 
 ```bash
 curl -X POST http://127.0.0.1:8088/api/v1/analyze \
@@ -88,7 +68,8 @@ curl -X POST http://127.0.0.1:8088/api/v1/analyze \
   -d '{"reg_number":"<номер>"}'
 ```
 
-Либо флаг парсера `-analyze-url http://analizator:8088`.
+Либо флаг парсера `-analyze-url http://analizator:8088` (см. ZakupkiParser).
+
 ## Структура данных тендера
 
 ```
@@ -154,7 +135,7 @@ YAML в `configs/checklists/`:
 | `CHECKLISTS_DIR` | `configs/checklists` | каталог YAML чек-листов |
 | `PROMPTS_DIR` | `configs/prompts` | system-промпты для LM Studio |
 | `DEFAULT_CHECKLIST` | `default` | чек-лист по умолчанию |
-| `DATABASE_URL` | _(в Docker — postgres сервиса)_ | PostgreSQL DSN (опционально для `go run`) |
+| `DATABASE_URL` | _(пусто)_ | PostgreSQL DSN (опционально) |
 
 ## API
 
