@@ -229,7 +229,15 @@ func (s *Service) analyzeDose(ctx context.Context, title, reg, law string, d Dos
 			if lmstudio.IsContextExceeded(err) {
 				continue
 			}
+			// Пустой content у Qwen — пробуем увеличить бюджет / уменьшить текст.
+			if strings.Contains(err.Error(), "empty content") {
+				continue
+			}
 			return doseBrief{}, err
+		}
+		if strings.TrimSpace(content) == "" {
+			lastErr = fmt.Errorf("пустой ответ модели на порцию")
+			continue
 		}
 		parsed := parseDoseJSON(content)
 		parsed.Index = d.Index
@@ -242,6 +250,11 @@ func (s *Service) analyzeDose(ctx context.Context, title, reg, law string, d Dos
 		parsed.Model = model
 		if parsed.Notes == "" {
 			parsed.Notes = content
+		}
+		// Если JSON не распарсился и notes = сырой мусор без пользы — ещё попытка с меньшей порцией.
+		if parsed.Status == "unknown" && len([]rune(parsed.Notes)) < 8 {
+			lastErr = fmt.Errorf("модель не дала заметок по порции")
+			continue
 		}
 		return parsed, nil
 	}
