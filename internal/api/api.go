@@ -37,6 +37,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /health", s.handleHealth)
 	s.mux.HandleFunc("GET /api/v1/checklists", s.handleListChecklists)
 	s.mux.HandleFunc("POST /api/v1/analyze", s.handleAnalyze)
+	s.mux.HandleFunc("GET /api/v1/analyze/progress/{reg}", s.handleAnalyzeProgress)
 	s.mux.HandleFunc("POST /api/v1/lm/smoke", s.handleLMSmoke)
 	s.mux.HandleFunc("GET /api/v1/analysis/{reg}", s.handleGetAnalysis)
 }
@@ -102,6 +103,32 @@ func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("analyze end reg=%q status=%s recommendation=%s doses=%d", req.RegNumber, res.Status, res.Recommendation, res.ChunksUsed)
 	writeJSON(w, http.StatusOK, res)
+}
+
+func (s *Server) handleAnalyzeProgress(w http.ResponseWriter, r *http.Request) {
+	reg := strings.TrimSpace(r.PathValue("reg"))
+	if reg == "" {
+		writeErr(w, http.StatusBadRequest, "reg required")
+		return
+	}
+	info, ok := s.svc.Progress().Get(reg)
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"reg_number":  reg,
+			"percent":     0,
+			"doses_done":  0,
+			"doses_total": 0,
+			"phase":       "idle",
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"reg_number":  reg,
+		"percent":     info.Percent,
+		"doses_done":  info.DosesDone,
+		"doses_total": info.DosesTotal,
+		"phase":       info.Phase,
+	})
 }
 
 // handleLMSmoke — один короткий chat/completions, чтобы проверить что LM Studio получает POST.
