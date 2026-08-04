@@ -6,3 +6,4 @@ dist/
 .vscode/
 *.log
 /data/
+.deps/
