@@ -158,6 +158,17 @@ YAML в `configs/checklists/`:
 | `POST` | `/api/v1/analyze` | запуск анализа |
 | `GET` | `/api/v1/analysis/{reg}` | получить сохранённый анализ |
 
+## Platform (каталог + UI)
+
+В [ZakupkiParser `platform/`](https://github.com/rinat1313/ZakupkiParser) API может вызывать этот сервис:
+
+```bash
+export ANALIZATOR_URL=http://127.0.0.1:8088
+# platform API: POST /api/v1/tenders/{id}/analyze
+```
+
+Compose profile `ai` в `ZakupkiParser/platform` поднимает analizator рядом с каталогом (см. `platform/docs/HANDOFF.md`).
+
 ## Разработка
 
 ```bash
