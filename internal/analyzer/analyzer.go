@@ -21,13 +21,21 @@ const FocusQuestion = "Оцени закупку по возможности у�
 // Service оркестрирует дозированный анализ → краткие ответы → итоговый синтез.
 type Service struct {
 	cfg      config.Config
-	llm      *lmstudio.Client
+	llm      LLM
 	store    *store.Store
 	prompts  prompt.Bundle
 	progress *progress.Tracker
 }
 
-func New(cfg config.Config, llm *lmstudio.Client, st *store.Store) *Service {
+// LLM — LM Studio клиент или пул endpoint'ов.
+type LLM interface {
+	ChatMaxTokens(ctx context.Context, messages []lmstudio.Message, maxTokens int) (string, string, error)
+	Ping(ctx context.Context) error
+	Model() string
+	BaseURL() string
+}
+
+func New(cfg config.Config, llm LLM, st *store.Store) *Service {
 	prompts, err := prompt.Load(cfg.PromptsDir)
 	if err != nil {
 		log.Printf("prompts warn: %v (using built-in defaults)", err)

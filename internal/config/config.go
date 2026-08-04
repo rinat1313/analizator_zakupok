@@ -98,7 +98,12 @@ func (c Config) Validate() error {
 		return fmt.Errorf("TENDERS_ROOT is required")
 	}
 	if c.LMStudioBaseURL == "" {
-		return fmt.Errorf("LM_STUDIO_BASE_URL is required")
+		// допускается пустой BASE_URL, если задан файл endpoints
+		if strings.TrimSpace(os.Getenv("LM_STUDIO_ENDPOINTS_FILE")) == "" {
+			if _, err := os.Stat("configs/lm_studio.yaml"); err != nil {
+				return fmt.Errorf("LM_STUDIO_BASE_URL or configs/lm_studio.yaml is required")
+			}
+		}
 	}
 	return nil
 }
