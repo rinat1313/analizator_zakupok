@@ -5,29 +5,23 @@
 # Источник IP/портов: zakupki-platform/configs/lm_studio_pool.conf
 # Перегенерация: ./up.sh --ai → scripts/lm-studio-start-pool.sh
 #
-# Модель: qwen/qwen3-8b, context 8192, thinking выключен в клиенте
-# (enable_thinking=false + /no_think) и через model.yaml при старте пула.
-#
-# Локальные 127.0.0.1 в conf → host.docker.internal для контейнера analizator.
-# concurrent: N — несколько слотов на один сервер (lms load --parallel N).
+# ВАЖНО для Docker:
+# - НЕ используйте 127.0.0.1 (это сам контейнер) — нужен host.docker.internal
+# - НЕ используйте эфемерные порты LM Studio (49xxx) — фиксируйте Server :1234
+# - Одна установка LMS = один порт; concurrent: 4 = 4 параллельных слота
 
 endpoints:
   - base_url: http://host.docker.internal:1234/v1
     api_key: lm-studio
     model: qwen/qwen3-8b
-    name: lm-1
-  - base_url: http://host.docker.internal:1235/v1
-    api_key: lm-studio
-    model: qwen/qwen3-8b
-    name: lm-2
-  - base_url: http://host.docker.internal:1236/v1
-    api_key: lm-studio
-    model: qwen/qwen3-8b
-    name: lm-3
-  - base_url: http://host.docker.internal:1237/v1
-    api_key: lm-studio
-    model: qwen/qwen3-8b
-    name: lm-4
+    name: lm-primary
+    concurrent: 4
+
+# Доп. машины (раскомментируйте / добавьте через lm_studio_pool.conf):
+#  - base_url: http://192.168.1.20:1234/v1
+#    api_key: lm-studio
+#    model: qwen/qwen3-8b
+#    name: lm-remote-2
 
 health_interval_sec: 15
 context_length: 8192

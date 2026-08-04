@@ -99,7 +99,7 @@ func Load(path string, fallback lmstudio.Options) (*Pool, error) {
 
 	seen := map[string]bool{}
 	add := func(ep EndpointConfig) {
-		ep.BaseURL = strings.TrimRight(strings.TrimSpace(ep.BaseURL), "/")
+		ep.BaseURL = rewriteDockerLocalhost(strings.TrimRight(strings.TrimSpace(ep.BaseURL), "/"))
 		if ep.BaseURL == "" {
 			return
 		}
@@ -160,6 +160,39 @@ func Load(path string, fallback lmstudio.Options) (*Pool, error) {
 		return nil, fmt.Errorf("lmpool: no LM Studio endpoints configured")
 	}
 	return p, nil
+}
+
+// rewriteDockerLocalhost меняет 127.0.0.1/localhost → host.docker.internal
+// внутри контейнера (иначе LM Studio на Mac недоступен).
+func rewriteDockerLocalhost(u string) string {
+	if u == "" || os.Getenv("LM_STUDIO_REWRITE_LOCALHOST") == "0" {
+		return u
+	}
+	inDocker := os.Getenv("ZAKUPKI_IN_DOCKER") == "1"
+	if !inDocker {
+		if _, err := os.Stat("/.dockerenv"); err == nil {
+			inDocker = true
+		}
+	}
+	if !inDocker {
+		return u
+	}
+	repls := []struct{ old, neu string }{
+		{"http://127.0.0.1:", "http://host.docker.internal:"},
+		{"http://localhost:", "http://host.docker.internal:"},
+		{"https://127.0.0.1:", "https://host.docker.internal:"},
+		{"https://localhost:", "https://host.docker.internal:"},
+	}
+	for _, r := range repls {
+		if strings.HasPrefix(u, r.old) {
+			out := r.neu + strings.TrimPrefix(u, r.old)
+			if out != u {
+				log.Printf("lmpool: rewrite %s → %s (docker)", u, out)
+			}
+			return out
+		}
+	}
+	return u
 }
 
 func (p *Pool) StartHealth(ctx context.Context) {
