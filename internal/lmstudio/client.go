@@ -13,10 +13,10 @@ import (
 
 // Client — OpenAI-compatible клиент к LM Studio (/v1/chat/completions).
 type Client struct {
-	baseURL    string
-	apiKey     string
-	model      string
-	httpClient *http.Client
+	baseURL     string
+	apiKey      string
+	model       string
+	httpClient  *http.Client
 	temperature float64
 	maxTokens   int
 }
@@ -81,11 +81,19 @@ type chatResponse struct {
 
 // Chat отправляет сообщения в LM Studio и возвращает текст ответа.
 func (c *Client) Chat(ctx context.Context, messages []Message) (string, string, error) {
+	return c.ChatMaxTokens(ctx, messages, c.maxTokens)
+}
+
+// ChatMaxTokens — Chat с переопределением max_tokens (короткие ответы на порции).
+func (c *Client) ChatMaxTokens(ctx context.Context, messages []Message, maxTokens int) (string, string, error) {
+	if maxTokens <= 0 {
+		maxTokens = c.maxTokens
+	}
 	reqBody := chatRequest{
 		Model:       c.model,
 		Messages:    messages,
 		Temperature: c.temperature,
-		MaxTokens:   c.maxTokens,
+		MaxTokens:   maxTokens,
 		Stream:      false,
 	}
 	raw, err := json.Marshal(reqBody)
@@ -132,6 +140,18 @@ func (c *Client) Chat(ctx context.Context, messages []Message) (string, string, 
 	return strings.TrimSpace(parsed.Choices[0].Message.Content), model, nil
 }
 
+// IsContextExceeded — ответ LM Studio про переполнение контекста.
+func IsContextExceeded(err error) bool {
+	if err == nil {
+		return false
+	}
+	low := strings.ToLower(err.Error())
+	return strings.Contains(low, "context size") ||
+		strings.Contains(low, "context length") ||
+		strings.Contains(low, "context_length") ||
+		strings.Contains(low, "exceeded") && strings.Contains(low, "context")
+}
+
 // Ping проверяет доступность /models.
 func (c *Client) Ping(ctx context.Context) error {
 	url := c.baseURL + "/models"
@@ -153,8 +173,9 @@ func (c *Client) Ping(ctx context.Context) error {
 }
 
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
-	return s[:n] + "…"
+	return string(r[:n]) + "…"
 }
