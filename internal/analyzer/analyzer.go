@@ -67,6 +67,10 @@ type synthResult struct {
 }
 
 // Analyze: режет документы на порции → краткий ответ на каждую → итоговая оценка для самозанятого.
+//
+// Источник текста для платформы zakupki-*:
+//   core читает карточку+documents.text_content из PostgreSQL и передаёт corpus в поле text.
+// Файлы valid_info/valid_doc на диске analizator — опциональный legacy, не обязательны.
 func (s *Service) Analyze(ctx context.Context, req Request) (*store.AnalysisResult, error) {
 	req.RegNumber = strings.TrimSpace(req.RegNumber)
 	req.Text = strings.TrimSpace(req.Text)
@@ -87,7 +91,6 @@ func (s *Service) Analyze(ctx context.Context, req Request) (*store.AnalysisResu
 		ChecklistName: FocusQuestion,
 		StartedAt:     started,
 	}
-	_ = s.store.SaveAnalysis(ctx, pending)
 
 	var law, title string
 	var sourceNames []string
@@ -96,34 +99,45 @@ func (s *Service) Analyze(ctx context.Context, req Request) (*store.AnalysisResu
 	if req.Title != "" {
 		title = req.Title
 	}
+
+	// 1) Главный путь: corpus из PostgreSQL (присылает zakupki-core).
 	if req.Text != "" {
 		textParts = append(textParts, req.Text)
-		sourceNames = append(sourceNames, "input_text")
+		sourceNames = append(sourceNames, "postgres_corpus")
+		log.Printf("analyze %s: got postgres corpus runes=%d", id, len([]rune(req.Text)))
 	}
 
-	if req.RegNumber != "" && s.store.Exists(req.RegNumber) {
+	// 2) Опционально добрать файлы на диске (legacy CLI). Не ошибка, если их нет —
+	// SaveAnalysis ниже создаёт каталог analysis/, из‑за чего Exists() становится true
+	// даже без valid_info/valid_doc.
+	if req.RegNumber != "" {
 		if meta, err := s.store.LoadTenderMeta(req.RegNumber); err == nil {
 			law = meta.Law
 			if title == "" {
 				title = meta.Title
 			}
 		}
-		sources, err := s.store.CollectSources(req.RegNumber, "")
-		if err != nil {
+		if sources, err := s.store.CollectSources(req.RegNumber, ""); err == nil {
+			for _, src := range sources {
+				sourceNames = append(sourceNames, src.Name)
+				textParts = append(textParts, fmt.Sprintf("[%s]\n%s", src.Name, src.Text))
+			}
+			log.Printf("analyze %s: added %d file sources", id, len(sources))
+		} else if req.Text == "" {
 			return s.fail(ctx, pending, err)
+		} else {
+			log.Printf("analyze %s: skip file sources (%v) — using postgres corpus", id, err)
 		}
-		for _, src := range sources {
-			sourceNames = append(sourceNames, src.Name)
-			textParts = append(textParts, fmt.Sprintf("[%s]\n%s", src.Name, src.Text))
-		}
-	} else if req.Text == "" {
-		return s.fail(ctx, pending, fmt.Errorf("тендер %s не найден в %s", req.RegNumber, s.cfg.TendersRoot))
 	}
 
 	corpus := joinCorpus(textParts)
 	if corpus == "" {
-		return s.fail(ctx, pending, fmt.Errorf("нет текста для анализа"))
+		return s.fail(ctx, pending, fmt.Errorf(
+			"нет текста для анализа: core должен передать text из PostgreSQL (documents.text_content), либо нужны файлы valid_info/valid_doc"))
 	}
+
+	// Сохраняем pending уже после проверки текста (иначе MkdirAll ломает Exists()).
+	_ = s.store.SaveAnalysis(ctx, pending)
 
 	plan := DosePlan{
 		PageChars:   s.cfg.PageChars,
@@ -134,8 +148,8 @@ func (s *Service) Analyze(ctx context.Context, req Request) (*store.AnalysisResu
 	if len(doses) == 0 {
 		return s.fail(ctx, pending, fmt.Errorf("не удалось нарезать текст на порции"))
 	}
-	log.Printf("analyze %s: corpus_runes≈%d doses=%d page=%d budget=%d focus=%q",
-		id, len([]rune(corpus)), len(doses), plan.PageChars, plan.BudgetChars, FocusQuestion)
+	log.Printf("analyze %s: corpus_runes≈%d doses=%d page=%d budget=%d sources=%v focus=%q",
+		id, len([]rune(corpus)), len(doses), plan.PageChars, plan.BudgetChars, sourceNames, FocusQuestion)
 
 	briefs := make([]doseBrief, 0, len(doses))
 	for _, d := range doses {
