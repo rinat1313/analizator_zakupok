@@ -174,11 +174,13 @@ go build -o bin/analizator ./cmd/analizator
 
 ## Связь с ZakupkiParser
 
-Этот репозиторий — отдельный модуль. Интеграция с парсером (общий `docker-compose`, флаг `-analyze-url`, создание `analysis/` при выгрузке) живёт в [ZakupkiParser](https://github.com/rinat1313/ZakupkiParser) (PR/ветка `cursor/analizator-zakupok-e602`).
+Этот репозиторий — отдельный модуль. Полный стек поднимается отсюда через `./scripts/up.sh` (клон парсера в `.deps/`, ветка `cursor/analizator-zakupok-e602`).
 
-Каталог тендеров монтируйте из парсера, например:
+Ручной mount, если парсер уже рядом:
 
 ```bash
-# рядом с клоном ZakupkiParser:
-export TENDERS_ROOT=../ZakupkiParser/DataCode/result
+export TENDERS_HOST_PATH=../ZakupkiParser/DataCode/result
+docker compose up -d --build
 ```
+
+См. [`docs/STACK.md`](docs/STACK.md).
