@@ -275,7 +275,8 @@ func buildDoseUser(title, reg, law string, d Dose, text string) string {
 		b.WriteString("Не делай итоговый вердикт по участию — только краткие заметки по ЭТОЙ порции. ")
 		b.WriteString("Запомни: полный вывод будет позже по сумме всех порций.\n")
 	} else {
-		b.WriteString("Это последняя порция текста. Дай краткие заметки только по ней; итоговый вердикт будет отдельным шагом.\n")
+		b.WriteString("ДОКУМЕНТЫ ЗАКОНЧИЛИСЬ: это последняя порция текста по закупке. ")
+		b.WriteString("Дай краткие заметки только по ней. Итоговый ответ «да/нет и почему» будет отдельным шагом после всех порций.\n")
 	}
 	b.WriteString("\n--- ТЕКСТ ПОРЦИИ ---\n")
 	b.WriteString(text)
@@ -286,8 +287,9 @@ func (s *Service) synthesizeDoses(ctx context.Context, title, reg, law string, b
 	var user strings.Builder
 	fmt.Fprintf(&user, "Целевой вопрос: %s\n", FocusQuestion)
 	fmt.Fprintf(&user, "Тендер: %s\nРегномер: %s\nЗакон: %s\n", title, reg, law)
-	user.WriteString("Ниже — краткие заметки модели по каждой порции документов. ")
-	user.WriteString("Собери итоговую оценку целесообразности участия самозанятого.\n\n")
+	user.WriteString("ДОКУМЕНТЫ ЗАКОНЧИЛИСЬ. Все порции текста переданы. ")
+	user.WriteString("Сформируй итоговый ответ: да или нет (может ли / целесообразно ли самозанятому участвовать) и почему. ")
+	user.WriteString("Ниже — краткие заметки модели по каждой порции документов (не сырой текст).\n\n")
 	raw, _ := json.MarshalIndent(briefsForSynth(briefs), "", "  ")
 	user.Write(raw)
 
@@ -368,9 +370,26 @@ func parseSynthJSON(content string) synthResult {
 	}
 	raw.Recommendation = strings.ToLower(strings.TrimSpace(raw.Recommendation))
 	switch raw.Recommendation {
-	case "participate", "caution", "skip", "unknown":
+	case "participate", "да", "yes":
+		raw.Recommendation = "participate"
+	case "caution", "осторожно", "с оговорками":
+		raw.Recommendation = "caution"
+	case "skip", "нет", "no":
+		raw.Recommendation = "skip"
+	case "unknown":
 	default:
-		raw.Recommendation = "unknown"
+		// Попробуем вывести из summary.
+		low := strings.ToLower(raw.Summary)
+		switch {
+		case strings.HasPrefix(low, "да:") || strings.HasPrefix(low, "да "):
+			raw.Recommendation = "participate"
+		case strings.HasPrefix(low, "нет:") || strings.HasPrefix(low, "нет "):
+			raw.Recommendation = "skip"
+		case strings.Contains(low, "оговорк"):
+			raw.Recommendation = "caution"
+		default:
+			raw.Recommendation = "unknown"
+		}
 	}
 	raw.Score = clamp01(raw.Score)
 	return raw
