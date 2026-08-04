@@ -6,18 +6,18 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/rinat1313/analizator_zakupok/internal/checklist"
-	"github.com/rinat1313/analizator_zakupok/internal/chunker"
 	"github.com/rinat1313/analizator_zakupok/internal/config"
 	"github.com/rinat1313/analizator_zakupok/internal/lmstudio"
 	"github.com/rinat1313/analizator_zakupok/internal/prompt"
 	"github.com/rinat1313/analizator_zakupok/internal/store"
 )
 
-// Service оркестрирует chunking → анализ по чек-листу → синтез рекомендаций.
+// FocusQuestion — целевой вопрос анализа по умолчанию.
+const FocusQuestion = "Оцени закупку по возможности участия самозанятого"
+
+// Service оркестрирует дозированный анализ → краткие ответы → итоговый синтез.
 type Service struct {
 	cfg     config.Config
 	llm     *lmstudio.Client
@@ -42,151 +42,19 @@ type Request struct {
 	Title       string `json:"title"`
 }
 
-// Analyze выполняет полный анализ и сохраняет раздел analysis.
-func (s *Service) Analyze(ctx context.Context, req Request) (*store.AnalysisResult, error) {
-	req.RegNumber = strings.TrimSpace(req.RegNumber)
-	req.Text = strings.TrimSpace(req.Text)
-	if req.RegNumber == "" && req.Text == "" {
-		return nil, fmt.Errorf("нужен reg_number и/или text")
-	}
-	if req.ChecklistID == "" {
-		req.ChecklistID = s.cfg.DefaultList
-	}
-
-	list, err := checklist.Load(s.cfg.ChecklistsDir, req.ChecklistID)
-	if err != nil {
-		return nil, err
-	}
-
-	id := req.RegNumber
-	if id == "" {
-		id = "text-" + time.Now().Format("20060102-150405")
-	}
-
-	started := time.Now().UTC().Format(time.RFC3339)
-	pending := &store.AnalysisResult{
-		RegNumber:     id,
-		Status:        "running",
-		ChecklistID:   list.ID,
-		ChecklistName: list.Name,
-		StartedAt:     started,
-	}
-	_ = s.store.SaveAnalysis(ctx, pending)
-
-	var sources []store.DocumentSource
-	var law, title string
-	if req.RegNumber != "" && s.store.Exists(req.RegNumber) {
-		meta, err := s.store.LoadTenderMeta(req.RegNumber)
-		if err == nil {
-			law = meta.Law
-			title = meta.Title
-		}
-		sources, err = s.store.CollectSources(req.RegNumber, req.Text)
-		if err != nil {
-			return s.fail(ctx, pending, err)
-		}
-	} else if req.Text != "" {
-		sources = store.CollectTextOnly(req.Text)
-		if req.Title != "" {
-			title = req.Title
-		}
-	} else {
-		return s.fail(ctx, pending, fmt.Errorf("тендер %s не найден в %s", req.RegNumber, s.cfg.TendersRoot))
-	}
-	if title == "" {
-		title = req.Title
-	}
-
-	opt := chunker.Options{
-		Size:    s.cfg.ChunkSize,
-		Overlap: s.cfg.ChunkOverlap,
-		Max:     0,
-	}
-	var allChunks []chunker.Chunk
-	var sourceNames []string
-	for _, src := range sources {
-		sourceNames = append(sourceNames, src.Name)
-		parts := chunker.Split(src.Name, src.Text, opt)
-		allChunks = append(allChunks, parts...)
-	}
-	if s.cfg.MaxChunks > 0 && len(allChunks) > s.cfg.MaxChunks {
-		// приоритет: valid_info + начало документов
-		allChunks = prioritizeChunks(allChunks, s.cfg.MaxChunks)
-	}
-
-	itemResults := make([]store.ItemResult, len(list.Items))
-	sem := make(chan struct{}, s.cfg.Concurrency)
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var firstErr error
-	chunksUsed := map[string]struct{}{}
-
-	for i, item := range list.Items {
-		i, item := i, item
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			selected := chunker.SelectRelevant(allChunks, item.Keywords, item.MaxChunks)
-			res, usedModel, err := s.analyzeItem(ctx, title, id, law, item, selected)
-			mu.Lock()
-			defer mu.Unlock()
-			if err != nil {
-				if firstErr == nil {
-					firstErr = err
-				}
-				itemResults[i] = store.ItemResult{
-					ID:       item.ID,
-					Title:    item.Title,
-					Status:   "unknown",
-					Findings: "ошибка анализа: " + err.Error(),
-				}
-				return
-			}
-			if usedModel != "" {
-				pending.Model = usedModel
-			}
-			itemResults[i] = res
-			for _, cid := range res.ChunkIDs {
-				chunksUsed[cid] = struct{}{}
-			}
-		}()
-	}
-	wg.Wait()
-	if firstErr != nil && allFailed(itemResults) {
-		return s.fail(ctx, pending, firstErr)
-	}
-
-	synth, model, err := s.synthesize(ctx, title, id, law, list, itemResults)
-	if err != nil {
-		log.Printf("synthesize warn: %v", err)
-		synth = fallbackSynth(itemResults)
-	}
-	if model != "" {
-		pending.Model = model
-	}
-
-	pending.Status = "completed"
-	pending.Law = law
-	pending.Items = itemResults
-	pending.Recommendation = synth.Recommendation
-	pending.Score = synth.Score
-	pending.Summary = synth.Summary
-	pending.Risks = synth.Risks
-	pending.Actions = synth.Actions
-	pending.SourcesUsed = sourceNames
-	pending.ChunksTotal = len(allChunks)
-	pending.ChunksUsed = len(chunksUsed)
-	pending.AnalyzedAt = time.Now().UTC().Format(time.RFC3339)
-	pending.RawSynthesize = synth.Raw
-	pending.Error = ""
-
-	if err := s.store.SaveAnalysis(ctx, pending); err != nil {
-		return nil, err
-	}
-	return pending, nil
+type doseBrief struct {
+	Index      int      `json:"index"`
+	Total      int      `json:"total"`
+	PageFrom   int      `json:"page_from"`
+	PageTo     int      `json:"page_to"`
+	Status     string   `json:"status"` // ok|warn|fail|unknown|neutral
+	Score      float64  `json:"score"`
+	Notes      string   `json:"notes"`
+	Flags      []string `json:"flags,omitempty"`
+	Raw        string   `json:"-"`
+	Model      string   `json:"-"`
+	RuneCount  int      `json:"rune_count,omitempty"`
+	MoreComing bool     `json:"more_coming"`
 }
 
 type synthResult struct {
@@ -198,61 +66,231 @@ type synthResult struct {
 	Raw            string   `json:"-"`
 }
 
-func (s *Service) analyzeItem(ctx context.Context, title, reg, law string, item checklist.Item, chunks []chunker.Chunk) (store.ItemResult, string, error) {
-	sys := s.prompts.ItemSystem
-
-	user := strings.Builder{}
-	fmt.Fprintf(&user, "Тендер: %s\nРегномер: %s\nЗакон: %s\n", title, reg, law)
-	fmt.Fprintf(&user, "Пункт чек-листа: %s (%s)\n%s\n", item.Title, item.ID, item.Description)
-	if item.Prompt != "" {
-		fmt.Fprintf(&user, "Инструкция: %s\n", item.Prompt)
-	}
-	user.WriteString("\n--- ФРАГМЕНТЫ ---\n")
-	ids := make([]string, 0, len(chunks))
-	for _, c := range chunks {
-		ids = append(ids, c.ID)
-		fmt.Fprintf(&user, "\n### %s (source=%s)\n%s\n", c.ID, c.Source, c.Text)
-	}
-	if len(chunks) == 0 {
-		user.WriteString("\n(фрагменты не найдены)\n")
+// Analyze: режет документы на порции → краткий ответ на каждую → итоговая оценка для самозанятого.
+func (s *Service) Analyze(ctx context.Context, req Request) (*store.AnalysisResult, error) {
+	req.RegNumber = strings.TrimSpace(req.RegNumber)
+	req.Text = strings.TrimSpace(req.Text)
+	if req.RegNumber == "" && req.Text == "" {
+		return nil, fmt.Errorf("нужен reg_number и/или text")
 	}
 
-	content, model, err := s.llm.Chat(ctx, []lmstudio.Message{
-		{Role: "system", Content: sys},
-		{Role: "user", Content: user.String()},
-	})
+	id := req.RegNumber
+	if id == "" {
+		id = "text-" + time.Now().Format("20060102-150405")
+	}
+
+	started := time.Now().UTC().Format(time.RFC3339)
+	pending := &store.AnalysisResult{
+		RegNumber:     id,
+		Status:        "running",
+		ChecklistID:   "samozanyaty-dosed",
+		ChecklistName: FocusQuestion,
+		StartedAt:     started,
+	}
+	_ = s.store.SaveAnalysis(ctx, pending)
+
+	var law, title string
+	var sourceNames []string
+	var textParts []string
+
+	if req.Title != "" {
+		title = req.Title
+	}
+	if req.Text != "" {
+		textParts = append(textParts, req.Text)
+		sourceNames = append(sourceNames, "input_text")
+	}
+
+	if req.RegNumber != "" && s.store.Exists(req.RegNumber) {
+		if meta, err := s.store.LoadTenderMeta(req.RegNumber); err == nil {
+			law = meta.Law
+			if title == "" {
+				title = meta.Title
+			}
+		}
+		sources, err := s.store.CollectSources(req.RegNumber, "")
+		if err != nil {
+			return s.fail(ctx, pending, err)
+		}
+		for _, src := range sources {
+			sourceNames = append(sourceNames, src.Name)
+			textParts = append(textParts, fmt.Sprintf("[%s]\n%s", src.Name, src.Text))
+		}
+	} else if req.Text == "" {
+		return s.fail(ctx, pending, fmt.Errorf("тендер %s не найден в %s", req.RegNumber, s.cfg.TendersRoot))
+	}
+
+	corpus := joinCorpus(textParts)
+	if corpus == "" {
+		return s.fail(ctx, pending, fmt.Errorf("нет текста для анализа"))
+	}
+
+	plan := DosePlan{
+		PageChars:   s.cfg.PageChars,
+		DosePages:   s.cfg.DosePages,
+		BudgetChars: s.cfg.ContextBudgetChars,
+	}
+	doses := BuildDoses(corpus, plan)
+	if len(doses) == 0 {
+		return s.fail(ctx, pending, fmt.Errorf("не удалось нарезать текст на порции"))
+	}
+	log.Printf("analyze %s: corpus_runes≈%d doses=%d page=%d budget=%d focus=%q",
+		id, len([]rune(corpus)), len(doses), plan.PageChars, plan.BudgetChars, FocusQuestion)
+
+	briefs := make([]doseBrief, 0, len(doses))
+	for _, d := range doses {
+		brief, err := s.analyzeDose(ctx, title, id, law, d)
+		if err != nil {
+			return s.fail(ctx, pending, fmt.Errorf("%s: %w", doseLabel(d), err))
+		}
+		if brief.Model != "" {
+			pending.Model = brief.Model
+		}
+		briefs = append(briefs, brief)
+		log.Printf("analyze %s: %s status=%s score=%.2f runes=%d",
+			id, doseLabel(d), brief.Status, brief.Score, brief.RuneCount)
+	}
+
+	synth, model, err := s.synthesizeDoses(ctx, title, id, law, briefs)
 	if err != nil {
-		return store.ItemResult{}, "", err
+		log.Printf("synthesize warn: %v", err)
+		synth = fallbackFromBriefs(briefs)
+	}
+	if model != "" {
+		pending.Model = model
 	}
 
-	parsed := parseItemJSON(content)
-	parsed.ID = item.ID
-	parsed.Title = item.Title
-	parsed.ChunkIDs = ids
-	if parsed.Findings == "" {
-		parsed.Findings = content
+	items := make([]store.ItemResult, 0, len(briefs))
+	for _, b := range briefs {
+		items = append(items, store.ItemResult{
+			ID:       fmt.Sprintf("dose-%d", b.Index),
+			Title:    fmt.Sprintf("Порция %d/%d (стр. ~%d–%d)", b.Index, b.Total, b.PageFrom, b.PageTo),
+			Status:   normalizeItemStatus(b.Status),
+			Score:    b.Score,
+			Findings: b.Notes,
+			Evidence: b.Flags,
+			ChunkIDs: []string{fmt.Sprintf("dose-%d", b.Index)},
+		})
 	}
-	return parsed, model, nil
+
+	pending.Status = "completed"
+	pending.Law = law
+	pending.Items = items
+	pending.Recommendation = synth.Recommendation
+	pending.Score = synth.Score
+	pending.Summary = synth.Summary
+	pending.Risks = synth.Risks
+	pending.Actions = synth.Actions
+	pending.SourcesUsed = uniq(sourceNames)
+	pending.ChunksTotal = len(doses)
+	pending.ChunksUsed = len(briefs)
+	pending.AnalyzedAt = time.Now().UTC().Format(time.RFC3339)
+	pending.RawSynthesize = synth.Raw
+	pending.Error = ""
+
+	if err := s.store.SaveAnalysis(ctx, pending); err != nil {
+		return nil, err
+	}
+	return pending, nil
 }
 
-func (s *Service) synthesize(ctx context.Context, title, reg, law string, list *checklist.List, items []store.ItemResult) (synthResult, string, error) {
-	sys := s.prompts.SynthesizeSystem
+func (s *Service) analyzeDose(ctx context.Context, title, reg, law string, d Dose) (doseBrief, error) {
+	text := d.Text
+	var lastErr error
+	for attempt := 0; attempt < 4; attempt++ {
+		if attempt > 0 {
+			text = ShrinkDose(text, 0.55)
+			if utf8Len(text) < 200 {
+				break
+			}
+			log.Printf("dose %d/%d shrink attempt=%d runes=%d", d.Index, d.Total, attempt, utf8Len(text))
+		}
+		user := buildDoseUser(title, reg, law, d, text)
+		content, model, err := s.llm.ChatMaxTokens(ctx, []lmstudio.Message{
+			{Role: "system", Content: s.prompts.DoseSystem},
+			{Role: "user", Content: user},
+		}, s.cfg.DoseMaxTokens)
+		if err != nil {
+			lastErr = err
+			if lmstudio.IsContextExceeded(err) {
+				continue
+			}
+			return doseBrief{}, err
+		}
+		parsed := parseDoseJSON(content)
+		parsed.Index = d.Index
+		parsed.Total = d.Total
+		parsed.PageFrom = d.PageFrom
+		parsed.PageTo = d.PageTo
+		parsed.MoreComing = d.MoreComing
+		parsed.RuneCount = utf8Len(text)
+		parsed.Raw = content
+		parsed.Model = model
+		if parsed.Notes == "" {
+			parsed.Notes = content
+		}
+		return parsed, nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("не удалось уместить порцию в контекст модели")
+	}
+	return doseBrief{}, lastErr
+}
 
+func buildDoseUser(title, reg, law string, d Dose, text string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Целевой вопрос анализа: %s\n", FocusQuestion)
+	fmt.Fprintf(&b, "Тендер: %s\nРегномер: %s\nЗакон: %s\n", title, reg, law)
+	fmt.Fprintf(&b, "Порция: %d из %d\n", d.Index, d.Total)
+	fmt.Fprintf(&b, "Страницы текста (примерно): %d–%d\n", d.PageFrom, d.PageTo)
+	if d.MoreComing {
+		b.WriteString("ВАЖНО: это НЕ весь документ. После этой порции будут ещё части текста. ")
+		b.WriteString("Не делай итоговый вердикт по участию — только краткие заметки по ЭТОЙ порции. ")
+		b.WriteString("Запомни: полный вывод будет позже по сумме всех порций.\n")
+	} else {
+		b.WriteString("Это последняя порция текста. Дай краткие заметки только по ней; итоговый вердикт будет отдельным шагом.\n")
+	}
+	b.WriteString("\n--- ТЕКСТ ПОРЦИИ ---\n")
+	b.WriteString(text)
+	return b.String()
+}
+
+func (s *Service) synthesizeDoses(ctx context.Context, title, reg, law string, briefs []doseBrief) (synthResult, string, error) {
 	var user strings.Builder
-	fmt.Fprintf(&user, "Тендер: %s\nРегномер: %s\nЗакон: %s\nЧек-лист: %s\n\n", title, reg, law, list.Name)
-	rawItems, _ := json.MarshalIndent(items, "", "  ")
-	user.Write(rawItems)
+	fmt.Fprintf(&user, "Целевой вопрос: %s\n", FocusQuestion)
+	fmt.Fprintf(&user, "Тендер: %s\nРегномер: %s\nЗакон: %s\n", title, reg, law)
+	user.WriteString("Ниже — краткие заметки модели по каждой порции документов. ")
+	user.WriteString("Собери итоговую оценку целесообразности участия самозанятого.\n\n")
+	raw, _ := json.MarshalIndent(briefsForSynth(briefs), "", "  ")
+	user.Write(raw)
 
-	content, model, err := s.llm.Chat(ctx, []lmstudio.Message{
-		{Role: "system", Content: sys},
+	content, model, err := s.llm.ChatMaxTokens(ctx, []lmstudio.Message{
+		{Role: "system", Content: s.prompts.SynthesizeSystem},
 		{Role: "user", Content: user.String()},
-	})
+	}, s.cfg.SynthMaxTokens)
 	if err != nil {
 		return synthResult{}, "", err
 	}
 	out := parseSynthJSON(content)
 	out.Raw = content
 	return out, model, nil
+}
+
+func briefsForSynth(briefs []doseBrief) []map[string]any {
+	out := make([]map[string]any, 0, len(briefs))
+	for _, b := range briefs {
+		out = append(out, map[string]any{
+			"dose":       b.Index,
+			"of":         b.Total,
+			"pages":      fmt.Sprintf("%d-%d", b.PageFrom, b.PageTo),
+			"status":     b.Status,
+			"score":      b.Score,
+			"notes":      b.Notes,
+			"flags":      b.Flags,
+			"more_after": b.MoreComing,
+		})
+	}
+	return out
 }
 
 func (s *Service) fail(ctx context.Context, pending *store.AnalysisResult, err error) (*store.AnalysisResult, error) {
@@ -263,31 +301,31 @@ func (s *Service) fail(ctx context.Context, pending *store.AnalysisResult, err e
 	return pending, err
 }
 
-func parseItemJSON(content string) store.ItemResult {
+func parseDoseJSON(content string) doseBrief {
 	var raw struct {
-		Status   string   `json:"status"`
-		Score    float64  `json:"score"`
-		Findings string   `json:"findings"`
-		Evidence []string `json:"evidence"`
+		Status string   `json:"status"`
+		Score  float64  `json:"score"`
+		Notes  string   `json:"notes"`
+		Flags  []string `json:"flags"`
 	}
 	if err := json.Unmarshal([]byte(extractJSON(content)), &raw); err != nil {
-		return store.ItemResult{
-			Status:   "unknown",
-			Findings: content,
-			Score:    0.5,
-		}
+		return doseBrief{Status: "unknown", Score: 0.5, Notes: content}
 	}
-	st := strings.ToLower(raw.Status)
+	st := strings.ToLower(strings.TrimSpace(raw.Status))
 	switch st {
-	case "ok", "warn", "fail", "unknown":
+	case "ok", "warn", "fail", "unknown", "neutral":
 	default:
 		st = "unknown"
 	}
-	return store.ItemResult{
-		Status:   st,
-		Score:    clamp01(raw.Score),
-		Findings: raw.Findings,
-		Evidence: raw.Evidence,
+	notes := raw.Notes
+	if notes == "" {
+		notes = content
+	}
+	return doseBrief{
+		Status: st,
+		Score:  clamp01(raw.Score),
+		Notes:  notes,
+		Flags:  raw.Flags,
 	}
 }
 
@@ -311,25 +349,33 @@ func parseSynthJSON(content string) synthResult {
 	return raw
 }
 
-func fallbackSynth(items []store.ItemResult) synthResult {
-	if len(items) == 0 {
-		return synthResult{Recommendation: "unknown", Score: 0.5, Summary: "Нет результатов по пунктам чек-листа."}
+func fallbackFromBriefs(briefs []doseBrief) synthResult {
+	if len(briefs) == 0 {
+		return synthResult{
+			Recommendation: "unknown",
+			Score:          0.5,
+			Summary:        "Нет заметок по порциям текста.",
+		}
 	}
 	sum := 0.0
 	fails, warns := 0, 0
 	var risks []string
-	for _, it := range items {
-		sum += it.Score
-		switch it.Status {
+	var notes []string
+	for _, b := range briefs {
+		sum += b.Score
+		notes = append(notes, fmt.Sprintf("Порция %d/%d: %s", b.Index, b.Total, trimRunes(b.Notes, 240)))
+		switch b.Status {
 		case "fail":
 			fails++
-			risks = append(risks, it.Title+": "+it.Findings)
+			risks = append(risks, b.Flags...)
+			if b.Notes != "" {
+				risks = append(risks, b.Notes)
+			}
 		case "warn":
 			warns++
-			risks = append(risks, it.Title+": "+it.Findings)
 		}
 	}
-	avg := sum / float64(len(items))
+	avg := sum / float64(len(briefs))
 	rec := "participate"
 	if fails > 0 {
 		rec = "skip"
@@ -339,9 +385,23 @@ func fallbackSynth(items []store.ItemResult) synthResult {
 	return synthResult{
 		Recommendation: rec,
 		Score:          avg,
-		Summary:        fmt.Sprintf("Агрегация без LLM: пунктов=%d, fail=%d, warn=%d, avg=%.2f", len(items), fails, warns, avg),
-		Risks:          risks,
-		Actions:        []string{"Проверить исходные документы вручную", "Уточнить требования заказчика"},
+		Summary: fmt.Sprintf(
+			"Агрегация без LLM по %d порциям (fail=%d warn=%d avg=%.2f). Вопрос: %s. %s",
+			len(briefs), fails, warns, avg, FocusQuestion, strings.Join(notes, " | "),
+		),
+		Risks:   uniq(risks),
+		Actions: []string{"Проверить требования к участникам вручную", "Уточнить, допускаются ли физлица / НПД / самозанятые"},
+	}
+}
+
+func normalizeItemStatus(st string) string {
+	switch strings.ToLower(st) {
+	case "ok", "warn", "fail", "unknown":
+		return strings.ToLower(st)
+	case "neutral":
+		return "ok"
+	default:
+		return "unknown"
 	}
 }
 
@@ -374,39 +434,29 @@ func clamp01(v float64) float64 {
 	return v
 }
 
-func allFailed(items []store.ItemResult) bool {
-	if len(items) == 0 {
-		return true
+func utf8Len(s string) int { return len([]rune(s)) }
+
+func trimRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
 	}
-	for _, it := range items {
-		if !strings.HasPrefix(it.Findings, "ошибка анализа:") {
-			return false
-		}
-	}
-	return true
+	return string(r[:n]) + "…"
 }
 
-func prioritizeChunks(chunks []chunker.Chunk, max int) []chunker.Chunk {
-	if len(chunks) <= max {
-		return chunks
-	}
-	var meta, docs []chunker.Chunk
-	for _, c := range chunks {
-		if strings.HasPrefix(c.Source, "valid_info/") {
-			meta = append(meta, c)
-		} else {
-			docs = append(docs, c)
+func uniq(in []string) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	for _, s := range in {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
 		}
-	}
-	out := append([]chunker.Chunk{}, meta...)
-	for _, c := range docs {
-		if len(out) >= max {
-			break
+		if _, ok := seen[s]; ok {
+			continue
 		}
-		out = append(out, c)
-	}
-	if len(out) > max {
-		out = out[:max]
+		seen[s] = struct{}{}
+		out = append(out, s)
 	}
 	return out
 }

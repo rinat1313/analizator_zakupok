@@ -10,23 +10,38 @@ import (
 
 // Bundle — системные промпты для LM Studio.
 type Bundle struct {
-	ItemSystem       string
+	DoseSystem       string
 	SynthesizeSystem string
+	// legacy aliases (старые файлы)
+	ItemSystem string
 }
 
 var (
 	defaults = Bundle{
-		ItemSystem: `Ты — эксперт по госзакупкам РФ (44-ФЗ / 223-ФЗ).
-Проанализируй ТОЛЬКО предоставленные фрагменты по пункту чек-листа.
+		DoseSystem: `Ты — эксперт по госзакупкам РФ (44-ФЗ / 223-ФЗ), фокус: участие самозанятого (НПД / физлицо).
+Тебе дают ОДНУ порцию текста закупки (не весь документ). Дальше могут прийти ещё порции.
+Задача: краткие заметки ТОЛЬКО по этой порции для будущего итогового вердикта.
+Не выноси окончательное решение «участвовать/не участвовать» по одной порции, если сказано что будут ещё части.
+Ищи признаки: допуск/запрет физлиц и самозанятых, требование юрлица/ИП, СМП, лицензии, СРО, обеспечение, опыт, ЭЦП, субподряд.
+
 Ответь строго JSON без markdown:
-{"status":"ok|warn|fail|unknown","score":0.0,"findings":"...","evidence":["..."]}
-status=ok — пункт в порядке; warn — риски/неясности; fail — критично; unknown — данных мало.
-score от 0 до 1 (выше = лучше для участия поставщика).`,
-		SynthesizeSystem: `Ты — старший аналитик госзакупок. На основе результатов чек-листа сформируй итоговую рекомендацию.
+{"status":"ok|warn|fail|unknown|neutral","score":0.0,"notes":"...","flags":["..."]}
+status: ok — для самозанятого благоприятно/нейтрально-позитивно; warn — ограничения/неясности; fail — явный стоп-фактор для самозанятого; neutral — ничего релевантного; unknown — данных мало.
+score 0..1 — насколько эта порция поддерживает возможность участия самозанятого.
+notes — 2–5 коротких предложений на русском.
+flags — короткие метки рисков/фактов (можно пустой массив).`,
+		SynthesizeSystem: `Ты — старший аналитик госзакупок. Вопрос по умолчанию:
+«Оцени закупку по возможности участия самозанятого».
+
+На входе — краткие заметки по порциям документов (не сырой текст). Сложи их в итоговую рекомендацию.
+Не выдумывай факты, которых нет в заметках.
+
 Ответь строго JSON без markdown:
 {"recommendation":"participate|caution|skip|unknown","score":0.0,"summary":"...","risks":["..."],"actions":["..."]}
-recommendation: participate — участвовать; caution — осторожно/нужна доработка; skip — не участвовать; unknown — недостаточно данных.
-score 0..1 — общая привлекательность для поставщика.`,
+recommendation: participate — самозанятому целесообразно участвовать; caution — можно, но с оговорками; skip — не стоит / нельзя; unknown — данных мало.
+score 0..1 — итоговая оценка возможности/целесообразности участия самозанятого.
+summary — 4–8 предложений на русском, явный ответ на вопрос про самозанятого.
+risks — ключевые риски; actions — что проверить/сделать дальше.`,
 	}
 	cacheMu sync.Mutex
 	cache   = map[string]Bundle{}
@@ -46,11 +61,15 @@ func Load(dir string) (Bundle, error) {
 	cacheMu.Unlock()
 
 	b := defaults
-	item, err := readOptional(filepath.Join(dir, "item_system.txt"))
+	dose, err := readOptional(filepath.Join(dir, "dose_system.txt"))
 	if err != nil {
 		return Bundle{}, err
 	}
-	if item != "" {
+	if dose != "" {
+		b.DoseSystem = dose
+	} else if item, err := readOptional(filepath.Join(dir, "item_system.txt")); err == nil && item != "" {
+		// fallback на старый файл
+		b.DoseSystem = item
 		b.ItemSystem = item
 	}
 	synth, err := readOptional(filepath.Join(dir, "synthesize_system.txt"))

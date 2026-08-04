@@ -22,43 +22,67 @@ type Config struct {
 	LMStudioTimeout time.Duration
 	Temperature     float64
 	MaxTokens       int
+	DoseMaxTokens   int // короткий ответ на порцию
+	SynthMaxTokens  int // итоговый синтез
 
-	// Chunking больших текстов.
+	// Дозированная подача текста в модель.
+	PageChars          int // рун ≈ «страница»
+	DosePages          int // целевое число страниц в порции
+	ContextBudgetChars int // макс. рун текста порции под контекст модели
+
+	// Legacy chunking (не используется новым пайплайном, оставлены для совместимости env).
 	ChunkSize    int
 	ChunkOverlap int
-	MaxChunks    int // 0 = без лимита
+	MaxChunks    int
 
 	// Чек-листы и промпты.
 	ChecklistsDir string
 	PromptsDir    string
 	DefaultList   string
 
-	// PostgreSQL (опционально): дублирование раздела analysis.
 	DatabaseURL string
-
-	// Сколько параллельных запросов к LM Studio.
 	Concurrency int
 }
 
 // Load читает конфиг из переменных окружения.
 func Load() Config {
 	cfg := Config{
-		HTTPAddr:        env("HTTP_ADDR", ":8088"),
-		TendersRoot:     env("TENDERS_ROOT", "/data/tenders"),
-		LMStudioBaseURL: strings.TrimRight(env("LM_STUDIO_BASE_URL", "http://127.0.0.1:1234/v1"), "/"),
-		LMStudioAPIKey:  env("LM_STUDIO_API_KEY", "lm-studio"),
-		LMStudioModel:   env("LM_STUDIO_MODEL", "local-model"),
-		LMStudioTimeout: envDuration("LM_STUDIO_TIMEOUT", 5*time.Minute),
-		Temperature:     envFloat("LM_TEMPERATURE", 0.2),
-		MaxTokens:       envInt("LM_MAX_TOKENS", 2048),
-		ChunkSize:       envInt("CHUNK_SIZE", 3500),
-		ChunkOverlap:    envInt("CHUNK_OVERLAP", 250),
-		MaxChunks:       envInt("MAX_CHUNKS", 40),
-		ChecklistsDir:   env("CHECKLISTS_DIR", "configs/checklists"),
-		PromptsDir:      env("PROMPTS_DIR", "configs/prompts"),
-		DefaultList:     env("DEFAULT_CHECKLIST", "default"),
-		DatabaseURL:     env("DATABASE_URL", ""),
-		Concurrency:     envInt("CONCURRENCY", 2),
+		HTTPAddr:           env("HTTP_ADDR", ":8088"),
+		TendersRoot:        env("TENDERS_ROOT", "/data/tenders"),
+		LMStudioBaseURL:    strings.TrimRight(env("LM_STUDIO_BASE_URL", "http://127.0.0.1:1234/v1"), "/"),
+		LMStudioAPIKey:     env("LM_STUDIO_API_KEY", "lm-studio"),
+		LMStudioModel:      env("LM_STUDIO_MODEL", "local-model"),
+		LMStudioTimeout:    envDuration("LM_STUDIO_TIMEOUT", 5*time.Minute),
+		Temperature:        envFloat("LM_TEMPERATURE", 0.2),
+		MaxTokens:          envInt("LM_MAX_TOKENS", 1024),
+		DoseMaxTokens:      envInt("DOSE_MAX_TOKENS", 400),
+		SynthMaxTokens:     envInt("SYNTH_MAX_TOKENS", 900),
+		PageChars:          envInt("PAGE_CHARS", 1800),
+		DosePages:          envInt("DOSE_PAGES", 5),
+		ContextBudgetChars: envInt("CONTEXT_BUDGET_CHARS", 10000),
+		ChunkSize:          envInt("CHUNK_SIZE", 3500),
+		ChunkOverlap:       envInt("CHUNK_OVERLAP", 250),
+		MaxChunks:          envInt("MAX_CHUNKS", 40),
+		ChecklistsDir:      env("CHECKLISTS_DIR", "configs/checklists"),
+		PromptsDir:         env("PROMPTS_DIR", "configs/prompts"),
+		DefaultList:        env("DEFAULT_CHECKLIST", "default"),
+		DatabaseURL:        env("DATABASE_URL", ""),
+		Concurrency:        envInt("CONCURRENCY", 1),
+	}
+	if cfg.DoseMaxTokens <= 0 {
+		cfg.DoseMaxTokens = 400
+	}
+	if cfg.SynthMaxTokens <= 0 {
+		cfg.SynthMaxTokens = 900
+	}
+	if cfg.PageChars < 400 {
+		cfg.PageChars = 400
+	}
+	if cfg.DosePages < 1 {
+		cfg.DosePages = 1
+	}
+	if cfg.ContextBudgetChars < 800 {
+		cfg.ContextBudgetChars = 800
 	}
 	if cfg.ChunkOverlap >= cfg.ChunkSize {
 		cfg.ChunkOverlap = cfg.ChunkSize / 5
