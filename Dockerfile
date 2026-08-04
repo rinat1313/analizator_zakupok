@@ -16,6 +16,7 @@ COPY configs /app/configs
 ENV HTTP_ADDR=:8088 \
     TENDERS_ROOT=/data/tenders \
     CHECKLISTS_DIR=/app/configs/checklists \
+    PROMPTS_DIR=/app/configs/prompts \
     LM_STUDIO_BASE_URL=http://host.docker.internal:1234/v1 \
     LM_STUDIO_MODEL=local-model
 EXPOSE 8088

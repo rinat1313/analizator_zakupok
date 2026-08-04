@@ -16,9 +16,15 @@ AI-ассистент анализа госзакупок для [ZakupkiParser]
 
 ## Быстрый старт
 
+> Для интегратора: пошаговая инструкция LAN + чек-листы + промпты — [`docs/INTEGRATOR.md`](docs/INTEGRATOR.md).
+
 ```bash
-# LM Studio: Local Server → порт 1234, загружена модель
-export LM_STUDIO_BASE_URL=http://127.0.0.1:1234/v1
+# 1) LM Studio: Local Server на :1234 (для LAN — Serve on Local Network)
+# 2) скопируйте env
+cp .env.example .env          # тот же ПК
+# или: cp .env.lan.example .env  # LM Studio на другом IP в сети
+
+export LM_STUDIO_BASE_URL=http://127.0.0.1:1234/v1   # или http://192.168.x.x:1234/v1
 export LM_STUDIO_MODEL=ваш-идентификатор-модели
 export TENDERS_ROOT=/path/to/ZakupkiParser/DataCode/result
 
@@ -104,6 +110,15 @@ YAML в `configs/checklists/`:
 
 Свой чек-лист: положите `configs/checklists/my.yaml` и передайте `"checklist_id":"my"`.
 
+## Промпты LM Studio
+
+Тексты system-ролей (без правки Go-кода):
+
+- `configs/prompts/item_system.txt` — анализ пункта чек-листа  
+- `configs/prompts/synthesize_system.txt` — итоговая рекомендация  
+
+Инструкция: [`docs/INTEGRATOR.md`](docs/INTEGRATOR.md).
+
 ## Переменные окружения
 
 | Переменная | По умолчанию | Смысл |
@@ -117,6 +132,8 @@ YAML в `configs/checklists/`:
 | `CHUNK_OVERLAP` | `250` | перекрытие |
 | `MAX_CHUNKS` | `40` | потолок кусков на тендер |
 | `CONCURRENCY` | `2` | параллельные запросы к LLM |
+| `CHECKLISTS_DIR` | `configs/checklists` | каталог YAML чек-листов |
+| `PROMPTS_DIR` | `configs/prompts` | system-промпты для LM Studio |
 | `DEFAULT_CHECKLIST` | `default` | чек-лист по умолчанию |
 | `DATABASE_URL` | _(пусто)_ | PostgreSQL DSN (опционально) |
 
@@ -136,16 +153,13 @@ go test ./...
 go build -o bin/analizator ./cmd/analizator
 ```
 
-## Публикация отдельным репозиторием
+## Связь с ZakupkiParser
 
-Код рассчитан на репозиторий `github.com/rinat1313/analizator_zakupok`.
-Если репозиторий ещё не создан на GitHub:
+Этот репозиторий — отдельный модуль. Интеграция с парсером (общий `docker-compose`, флаг `-analyze-url`, создание `analysis/` при выгрузке) живёт в [ZakupkiParser](https://github.com/rinat1313/ZakupkiParser) (PR/ветка `cursor/analizator-zakupok-e602`).
+
+Каталог тендеров монтируйте из парсера, например:
 
 ```bash
-# от владельца аккаунта (нужны права create repo):
-gh repo create rinat1313/analizator_zakupok --public \
-  --description "AI-ассистент анализа тендеров (LM Studio) для ZakupkiParser" \
-  --source=. --remote=origin --push
+# рядом с клоном ZakupkiParser:
+export TENDERS_ROOT=../ZakupkiParser/DataCode/result
 ```
-
-Либо создайте пустой репозиторий в UI и выполните `git push -u origin main` из этой папки.

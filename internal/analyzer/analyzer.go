@@ -13,18 +13,25 @@ import (
 	"github.com/rinat1313/analizator_zakupok/internal/chunker"
 	"github.com/rinat1313/analizator_zakupok/internal/config"
 	"github.com/rinat1313/analizator_zakupok/internal/lmstudio"
+	"github.com/rinat1313/analizator_zakupok/internal/prompt"
 	"github.com/rinat1313/analizator_zakupok/internal/store"
 )
 
 // Service оркестрирует chunking → анализ по чек-листу → синтез рекомендаций.
 type Service struct {
-	cfg   config.Config
-	llm   *lmstudio.Client
-	store *store.Store
+	cfg     config.Config
+	llm     *lmstudio.Client
+	store   *store.Store
+	prompts prompt.Bundle
 }
 
 func New(cfg config.Config, llm *lmstudio.Client, st *store.Store) *Service {
-	return &Service{cfg: cfg, llm: llm, store: st}
+	prompts, err := prompt.Load(cfg.PromptsDir)
+	if err != nil {
+		log.Printf("prompts warn: %v (using built-in defaults)", err)
+		prompts, _ = prompt.Load("")
+	}
+	return &Service{cfg: cfg, llm: llm, store: st, prompts: prompts}
 }
 
 // Request вход анализа.
@@ -192,13 +199,7 @@ type synthResult struct {
 }
 
 func (s *Service) analyzeItem(ctx context.Context, title, reg, law string, item checklist.Item, chunks []chunker.Chunk) (store.ItemResult, string, error) {
-	var b strings.Builder
-	b.WriteString("Ты — эксперт по госзакупкам РФ (44-ФЗ / 223-ФЗ).\n")
-	b.WriteString("Проанализируй ТОЛЬКО предоставленные фрагменты по пункту чек-листа.\n")
-	b.WriteString("Ответь строго JSON без markdown:\n")
-	b.WriteString(`{"status":"ok|warn|fail|unknown","score":0.0,"findings":"...","evidence":["..."]}` + "\n")
-	b.WriteString("status=ok — пункт в порядке; warn — риски/неясности; fail — критично; unknown — данных мало.\n")
-	b.WriteString("score от 0 до 1 (выше = лучше для участия поставщика).\n")
+	sys := s.prompts.ItemSystem
 
 	user := strings.Builder{}
 	fmt.Fprintf(&user, "Тендер: %s\nРегномер: %s\nЗакон: %s\n", title, reg, law)
@@ -217,7 +218,7 @@ func (s *Service) analyzeItem(ctx context.Context, title, reg, law string, item 
 	}
 
 	content, model, err := s.llm.Chat(ctx, []lmstudio.Message{
-		{Role: "system", Content: b.String()},
+		{Role: "system", Content: sys},
 		{Role: "user", Content: user.String()},
 	})
 	if err != nil {
@@ -235,11 +236,7 @@ func (s *Service) analyzeItem(ctx context.Context, title, reg, law string, item 
 }
 
 func (s *Service) synthesize(ctx context.Context, title, reg, law string, list *checklist.List, items []store.ItemResult) (synthResult, string, error) {
-	sys := `Ты — старший аналитик госзакупок. На основе результатов чек-листа сформируй итоговую рекомендацию.
-Ответь строго JSON без markdown:
-{"recommendation":"participate|caution|skip|unknown","score":0.0,"summary":"...","risks":["..."],"actions":["..."]}
-recommendation: participate — участвовать; caution — осторожно/нужна доработка; skip — не участвовать; unknown — недостаточно данных.
-score 0..1 — общая привлекательность для поставщика.`
+	sys := s.prompts.SynthesizeSystem
 
 	var user strings.Builder
 	fmt.Fprintf(&user, "Тендер: %s\nРегномер: %s\nЗакон: %s\nЧек-лист: %s\n\n", title, reg, law, list.Name)

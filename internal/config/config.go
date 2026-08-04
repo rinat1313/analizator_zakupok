@@ -28,8 +28,9 @@ type Config struct {
 	ChunkOverlap int
 	MaxChunks    int // 0 = без лимита
 
-	// Чек-листы.
+	// Чек-листы и промпты.
 	ChecklistsDir string
+	PromptsDir    string
 	DefaultList   string
 
 	// PostgreSQL (опционально): дублирование раздела analysis.
@@ -44,7 +45,7 @@ func Load() Config {
 	cfg := Config{
 		HTTPAddr:        env("HTTP_ADDR", ":8088"),
 		TendersRoot:     env("TENDERS_ROOT", "/data/tenders"),
-		LMStudioBaseURL: strings.TrimRight(env("LM_STUDIO_BASE_URL", "http://host.docker.internal:1234/v1"), "/"),
+		LMStudioBaseURL: strings.TrimRight(env("LM_STUDIO_BASE_URL", "http://127.0.0.1:1234/v1"), "/"),
 		LMStudioAPIKey:  env("LM_STUDIO_API_KEY", "lm-studio"),
 		LMStudioModel:   env("LM_STUDIO_MODEL", "local-model"),
 		LMStudioTimeout: envDuration("LM_STUDIO_TIMEOUT", 5*time.Minute),
@@ -54,6 +55,7 @@ func Load() Config {
 		ChunkOverlap:    envInt("CHUNK_OVERLAP", 250),
 		MaxChunks:       envInt("MAX_CHUNKS", 40),
 		ChecklistsDir:   env("CHECKLISTS_DIR", "configs/checklists"),
+		PromptsDir:      env("PROMPTS_DIR", "configs/prompts"),
 		DefaultList:     env("DEFAULT_CHECKLIST", "default"),
 		DatabaseURL:     env("DATABASE_URL", ""),
 		Concurrency:     envInt("CONCURRENCY", 2),

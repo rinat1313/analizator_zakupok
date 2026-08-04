@@ -1,5 +1,13 @@
-# Автономный запуск analizator_zakupok (+ PostgreSQL для раздела analysis).
-# LM Studio должен быть доступен с хоста (порт 1234) или через LM_STUDIO_BASE_URL.
+# Автономный запуск analizator_zakupok.
+#
+# LM Studio в локальной сети:
+#   export LM_STUDIO_BASE_URL=http://192.168.1.50:1234/v1
+#   export LM_STUDIO_MODEL=<id модели из LM Studio>
+#   docker compose up -d --build
+#
+# LM Studio на том же хосте, что и Docker:
+#   LM_STUDIO_BASE_URL=http://host.docker.internal:1234/v1
+#   (Linux: extra_hosts host.docker.internal уже прописан)
 
 services:
   postgres:
@@ -18,31 +26,38 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    profiles: ["db"]
 
   analizator:
     build: .
     ports:
       - "8088:8088"
+    env_file:
+      - path: .env
+        required: false
     environment:
       HTTP_ADDR: ":8088"
       TENDERS_ROOT: /data/tenders
       CHECKLISTS_DIR: /app/configs/checklists
-      DEFAULT_CHECKLIST: default
+      PROMPTS_DIR: /app/configs/prompts
+      DEFAULT_CHECKLIST: ${DEFAULT_CHECKLIST:-default}
+      # LAN: http://192.168.x.x:1234/v1  |  same host: http://host.docker.internal:1234/v1
       LM_STUDIO_BASE_URL: ${LM_STUDIO_BASE_URL:-http://host.docker.internal:1234/v1}
       LM_STUDIO_API_KEY: ${LM_STUDIO_API_KEY:-lm-studio}
       LM_STUDIO_MODEL: ${LM_STUDIO_MODEL:-local-model}
-      DATABASE_URL: postgres://zakupki:zakupki@postgres:5432/zakupki?sslmode=disable
-      CHUNK_SIZE: "3500"
-      CHUNK_OVERLAP: "250"
-      MAX_CHUNKS: "40"
-      CONCURRENCY: "2"
+      LM_STUDIO_TIMEOUT: ${LM_STUDIO_TIMEOUT:-5m}
+      CHUNK_SIZE: ${CHUNK_SIZE:-3500}
+      CHUNK_OVERLAP: ${CHUNK_OVERLAP:-250}
+      MAX_CHUNKS: ${MAX_CHUNKS:-40}
+      CONCURRENCY: ${CONCURRENCY:-2}
+      # Раскомментируйте вместе с profile db:
+      # DATABASE_URL: postgres://zakupki:zakupki@postgres:5432/zakupki?sslmode=disable
     volumes:
-      - tenders_data:/data/tenders
+      - ${TENDERS_HOST_PATH:-tenders_data}:/data/tenders
+      # правки чек-листов/промптов без пересборки образа:
+      - ./configs:/app/configs:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    depends_on:
-      postgres:
-        condition: service_healthy
 
 volumes:
   pgdata:
