@@ -58,10 +58,15 @@ docker compose up -d --build
 
 ## Совместно с ZakupkiParser
 
-Полный стек (parser + PostgreSQL + analizator) поднимается **из репозитория парсера**, не из этого модуля.
+Рекомендуемый запуск всего стека — из оркестратора **[zakupki-platform](https://github.com/rinat1313/zakupki-platform)**:
 
-Ветка/PR с готовым `docker-compose.yml`:  
-https://github.com/rinat1313/ZakupkiParser/pull/1
+```bash
+cd ../zakupki-platform
+export LM_STUDIO_MODEL=<id>
+make up-ai
+```
+
+Legacy: совместный compose ещё есть в [ZakupkiParser PR #1](https://github.com/rinat1313/ZakupkiParser/pull/1).
 
 ```bash
 git clone https://github.com/rinat1313/ZakupkiParser.git
