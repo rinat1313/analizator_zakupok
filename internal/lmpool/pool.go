@@ -148,7 +148,9 @@ func Load(path string, fallback lmstudio.Options) (*Pool, error) {
 	for _, ep := range fc.Endpoints {
 		add(ep)
 	}
-	if fallback.BaseURL != "" {
+	// Список серверов — только из YAML. Env LM_STUDIO_BASE_URL добавляем,
+	// только если в файле нет ни одного endpoint (иначе появляются «лишние» вроде env-default).
+	if len(p.slots) == 0 && fallback.BaseURL != "" {
 		add(EndpointConfig{
 			Name:    "env-default",
 			BaseURL: fallback.BaseURL,
@@ -159,6 +161,7 @@ func Load(path string, fallback lmstudio.Options) (*Pool, error) {
 	if len(p.slots) == 0 {
 		return nil, fmt.Errorf("lmpool: no LM Studio endpoints configured")
 	}
+	log.Printf("lmpool: using %d slot(s) from yaml only", len(p.slots))
 	return p, nil
 }
 

@@ -1,14 +1,25 @@
-# Автогенерация: scripts/lm-studio-start-pool.sh
-# Источник: /agent/repos/zakupki-platform/configs/lm_studio_pool.conf
-# Модель qwen/qwen3-8b, context 8192, thinking off (клиент + model.yaml).
-# IP/порты: configs/lm_studio_pool.conf → ./up.sh --ai
+# Единственный источник списка LM Studio для analizator.
+# ./up.sh --ai больше НЕ перезаписывает этот файл из lm_studio_pool.conf.
+#
+# Модель: qwen/qwen3-8b, context 8192, thinking off в клиенте.
+# concurrent — сколько параллельных запросов на этот сервер.
+#
+# Локальный Mac (Docker → host):
+#   host.docker.internal:1234
+# Второй хост в LAN:
+#   192.168.1.124:1234  (Serve on Local Network / bind 0.0.0.0)
 
 endpoints:
   - base_url: http://host.docker.internal:1234/v1
     api_key: lm-studio
     model: qwen/qwen3-8b
-    name: lm-1
-    concurrent: 4
+    name: lm-local
+    concurrent: 2
+  - base_url: http://192.168.1.124:1234/v1
+    api_key: lm-studio
+    model: qwen/qwen3-8b
+    name: lm-124
+    concurrent: 2
 
 health_interval_sec: 15
 context_length: 8192
