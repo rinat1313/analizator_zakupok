@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -232,28 +232,32 @@ func (p *Pool) Refresh(ctx context.Context) {
 	wg.Wait()
 }
 
-func cpuCap() int {
-	n := runtime.NumCPU()
-	// не более CPU − 10% (минимум 1)
-	cut := n / 10
-	if cut < 1 && n > 1 {
-		cut = 1
+func envMaxParallel() int {
+	const defaultMax = 4
+	v := strings.TrimSpace(os.Getenv("LM_MAX_PARALLEL"))
+	if v == "" {
+		return defaultMax
 	}
-	out := n - cut
-	if out < 1 {
-		out = 1
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 {
+		return defaultMax
 	}
-	return out
+	if n > 64 {
+		return 64
+	}
+	return n
 }
 
 func (p *Pool) MaxParallel() int {
 	h := p.HealthyCount()
-	cap := cpuCap()
 	if h < 1 {
-		return 1
+		return 0
 	}
-	if h > cap {
-		return cap
+	// Параллелизм = число живых слотов LM Studio, не CPU контейнера analizator
+	// (LLM крутится на хосте). Потолок по умолчанию 4 (LM_MAX_PARALLEL).
+	maxN := envMaxParallel()
+	if h > maxN {
+		return maxN
 	}
 	return h
 }
