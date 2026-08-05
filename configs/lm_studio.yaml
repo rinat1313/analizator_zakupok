@@ -1,27 +1,14 @@
-# Список доступных LM Studio (OpenAI-compatible /v1).
-# Анализатор проверяет доступность и параллелит AI по числу живых слотов
-# (не больше ~90% CPU хоста).
-#
-# Источник IP/портов: zakupki-platform/configs/lm_studio_pool.conf
-# Перегенерация: ./up.sh --ai → scripts/lm-studio-start-pool.sh
-#
-# ВАЖНО для Docker:
-# - НЕ используйте 127.0.0.1 (это сам контейнер) — нужен host.docker.internal
-# - НЕ используйте эфемерные порты LM Studio (49xxx) — фиксируйте Server :1234
-# - Одна установка LMS = один порт; concurrent: 4 = 4 параллельных слота
+# Автогенерация: scripts/lm-studio-start-pool.sh
+# Источник: /agent/repos/zakupki-platform/configs/lm_studio_pool.conf
+# Модель qwen/qwen3-8b, context 8192, thinking off (клиент + model.yaml).
+# IP/порты: configs/lm_studio_pool.conf → ./up.sh --ai
 
 endpoints:
   - base_url: http://host.docker.internal:1234/v1
     api_key: lm-studio
     model: qwen/qwen3-8b
-    name: lm-primary
+    name: lm-1
     concurrent: 4
-
-# Доп. машины (раскомментируйте / добавьте через lm_studio_pool.conf):
-#  - base_url: http://192.168.1.20:1234/v1
-#    api_key: lm-studio
-#    model: qwen/qwen3-8b
-#    name: lm-remote-2
 
 health_interval_sec: 15
 context_length: 8192
