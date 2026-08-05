@@ -1,23 +1,27 @@
-# Список доступных LM Studio (OpenAI-compatible /v1).
-# Анализатор проверяет доступность и параллелит AI по числу живых endpoint'ов
-# (не больше ~90% CPU хоста).
+# Единственный источник списка LM Studio для analizator.
+# ./up.sh --ai этот файл НЕ перезаписывает.
 #
-# Переменная LM_STUDIO_ENDPOINTS_FILE может указать другой путь.
-# Если файл пуст/отсутствует — используется LM_STUDIO_BASE_URL из окружения.
+# Основной сервер: 192.168.1.124:1234 (LAN)
+# Резерв: локальный Mac через Docker host.docker.internal:1234
+#
+# На .124: Server Start, порт 1234, Serve on Local Network / bind 0.0.0.0,
+# модель qwen/qwen3-8b загружена. Проверка с Mac:
+#   curl -s http://192.168.1.124:1234/v1/models | head
+# Из контейнера:
+#   docker compose --profile ai exec analizator wget -qO- http://192.168.1.124:1234/v1/models
 
 endpoints:
-  - base_url: http://127.0.0.1:1234/v1
+  - base_url: http://192.168.1.124:1234/v1
     api_key: lm-studio
     model: qwen/qwen3-8b
-    name: local-1
-  # - base_url: http://192.168.1.20:1234/v1
-  #   api_key: lm-studio
-  #   model: qwen/qwen3-8b
-  #   name: remote-2
-  # - base_url: http://192.168.1.21:1234/v1
-  #   api_key: lm-studio
-  #   model: qwen/qwen3-8b
-  #   name: remote-3
+    name: lm-124
+    concurrent: 4
+  - base_url: http://host.docker.internal:1234/v1
+    api_key: lm-studio
+    model: qwen/qwen3-8b
+    name: lm-local
+    concurrent: 2
 
-# Как часто перепроверять доступность (секунды).
-health_interval_sec: 15
+health_interval_sec: 10
+context_length: 8192
+thinking: false
