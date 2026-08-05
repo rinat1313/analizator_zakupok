@@ -1,26 +1,27 @@
 # Единственный источник списка LM Studio для analizator.
-# ./up.sh --ai больше НЕ перезаписывает этот файл из lm_studio_pool.conf.
+# ./up.sh --ai этот файл НЕ перезаписывает.
 #
-# Модель: qwen/qwen3-8b, context 8192, thinking off в клиенте.
-# concurrent — сколько параллельных запросов на этот сервер.
+# Основной сервер: 192.168.1.124:1234 (LAN)
+# Резерв: локальный Mac через Docker host.docker.internal:1234
 #
-# Локальный Mac (Docker → host):
-#   host.docker.internal:1234
-# Второй хост в LAN:
-#   192.168.1.124:1234  (Serve on Local Network / bind 0.0.0.0)
+# На .124: Server Start, порт 1234, Serve on Local Network / bind 0.0.0.0,
+# модель qwen/qwen3-8b загружена. Проверка с Mac:
+#   curl -s http://192.168.1.124:1234/v1/models | head
+# Из контейнера:
+#   docker compose --profile ai exec analizator wget -qO- http://192.168.1.124:1234/v1/models
 
 endpoints:
+  - base_url: http://192.168.1.124:1234/v1
+    api_key: lm-studio
+    model: qwen/qwen3-8b
+    name: lm-124
+    concurrent: 4
   - base_url: http://host.docker.internal:1234/v1
     api_key: lm-studio
     model: qwen/qwen3-8b
     name: lm-local
     concurrent: 2
-  - base_url: http://192.168.1.124:1234/v1
-    api_key: lm-studio
-    model: qwen/qwen3-8b
-    name: lm-124
-    concurrent: 2
 
-health_interval_sec: 15
+health_interval_sec: 10
 context_length: 8192
 thinking: false

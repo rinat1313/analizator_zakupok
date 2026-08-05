@@ -36,6 +36,7 @@ type slot struct {
 	client  *lmstudio.Client
 	healthy atomic.Bool
 	busy    atomic.Bool
+	fails   atomic.Int32
 	lastErr atomic.Value // string
 }
 
@@ -47,6 +48,7 @@ type Pool struct {
 	maxTok  int
 
 	healthEvery time.Duration
+	rr          atomic.Uint64
 	mu          sync.Mutex
 }
 
@@ -215,22 +217,51 @@ func (p *Pool) StartHealth(ctx context.Context) {
 }
 
 func (p *Pool) Refresh(ctx context.Context) {
-	var wg sync.WaitGroup
+	// Один ping на уникальный base_url — иначе concurrent-слоты долбят LMS и получают RST.
+	type group struct {
+		slots []*slot
+	}
+	byURL := map[string]*group{}
+	order := make([]string, 0)
 	for _, s := range p.slots {
+		u := s.cfg.BaseURL
+		g, ok := byURL[u]
+		if !ok {
+			g = &group{}
+			byURL[u] = g
+			order = append(order, u)
+		}
+		g.slots = append(g.slots, s)
+	}
+
+	var wg sync.WaitGroup
+	for _, u := range order {
+		g := byURL[u]
 		wg.Add(1)
-		go func(s *slot) {
+		go func(g *group) {
 			defer wg.Done()
-			cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			rep := g.slots[0]
+			cctx, cancel := context.WithTimeout(ctx, 12*time.Second)
 			defer cancel()
-			err := s.client.Ping(cctx)
+			err := rep.client.PingFresh(cctx)
 			if err != nil {
-				s.healthy.Store(false)
-				s.lastErr.Store(err.Error())
+				for _, s := range g.slots {
+					n := s.fails.Add(1)
+					// 2 подряд неудачи → unhealthy (не сбрасываем с первого таймаута)
+					if n >= 2 {
+						s.healthy.Store(false)
+					}
+					s.lastErr.Store(err.Error())
+				}
+				log.Printf("lmpool: health fail %s: %v", rep.cfg.BaseURL, err)
 			} else {
-				s.healthy.Store(true)
-				s.lastErr.Store("")
+				for _, s := range g.slots {
+					s.fails.Store(0)
+					s.healthy.Store(true)
+					s.lastErr.Store("")
+				}
 			}
-		}(s)
+		}(g)
 	}
 	wg.Wait()
 }
@@ -304,8 +335,14 @@ func (p *Pool) Status() Status {
 
 func (p *Pool) acquire(ctx context.Context) (*slot, error) {
 	deadline := time.Now().Add(2 * time.Minute)
+	n := len(p.slots)
+	if n == 0 {
+		return nil, fmt.Errorf("lmpool: no slots")
+	}
 	for {
-		for _, s := range p.slots {
+		start := int(p.rr.Add(1) % uint64(n))
+		for i := 0; i < n; i++ {
+			s := p.slots[(start+i)%n]
 			if !s.healthy.Load() {
 				continue
 			}
@@ -344,11 +381,17 @@ func (p *Pool) ChatMaxTokens(ctx context.Context, messages []lmstudio.Message, m
 	if err != nil {
 		// при ошибке связи — пометить unhealthy
 		if strings.Contains(err.Error(), "connection") || strings.Contains(err.Error(), "timeout") {
-			s.healthy.Store(false)
+			s.fails.Add(1)
+			if s.fails.Load() >= 2 {
+				s.healthy.Store(false)
+			}
 			s.lastErr.Store(err.Error())
 		}
 		return "", "", err
 	}
+	s.fails.Store(0)
+	s.healthy.Store(true)
+	s.lastErr.Store("")
 	return content, model, nil
 }
 
