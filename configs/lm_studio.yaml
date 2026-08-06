@@ -1,14 +1,17 @@
 # Единственный источник списка LM Studio для analizator.
 # ./up.sh --ai этот файл НЕ перезаписывает.
 #
-# Основной сервер: 192.168.1.124:1234 (LAN)
-# Резерв: локальный Mac через Docker host.docker.internal:1234
+# Analizator в режиме LAN (docker-compose.analizator-lan.yml) идёт через
+# network_mode=host — поэтому локальный LMS = 127.0.0.1, не host.docker.internal.
 #
-# На .124: Server Start, порт 1234, Serve on Local Network / bind 0.0.0.0,
-# модель qwen/qwen3-8b загружена. Проверка с Mac:
+# Основной: 192.168.1.124:1234 (другая машина в LAN)
+# Резерв:   127.0.0.1:1234 (LM Studio на этом Mac)
+#
+# На .124: Server Start, порт 1234, Serve on Local Network / 0.0.0.0
 #   curl -s http://192.168.1.124:1234/v1/models | head
-# Из контейнера:
-#   docker compose --profile ai exec analizator wget -qO- http://192.168.1.124:1234/v1/models
+# После ./up.sh --ai:
+#   ./scripts/probe-lm-lan.sh
+#   curl -s http://127.0.0.1:8088/api/v1/lm/pool
 
 endpoints:
   - base_url: http://192.168.1.124:1234/v1
@@ -16,7 +19,7 @@ endpoints:
     model: qwen/qwen3-8b
     name: lm-124
     concurrent: 4
-  - base_url: http://host.docker.internal:1234/v1
+  - base_url: http://127.0.0.1:1234/v1
     api_key: lm-studio
     model: qwen/qwen3-8b
     name: lm-local
