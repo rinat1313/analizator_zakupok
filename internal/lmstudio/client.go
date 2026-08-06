@@ -51,7 +51,7 @@ func New(opt Options) *Client {
 		model:       opt.Model,
 		temperature: opt.Temperature,
 		maxTokens:   opt.MaxTokens,
-		pingTTL:     60 * time.Second,
+		pingTTL:     10 * time.Second,
 		httpClient: &http.Client{
 			Timeout: opt.Timeout,
 		},
@@ -258,9 +258,18 @@ func IsContextExceeded(err error) bool {
 
 // Ping проверяет /models. Результат кэшируется.
 func (c *Client) Ping(ctx context.Context) error {
+	return c.ping(ctx, false)
+}
+
+// PingFresh всегда ходит в сеть (для health-пула).
+func (c *Client) PingFresh(ctx context.Context) error {
+	return c.ping(ctx, true)
+}
+
+func (c *Client) ping(ctx context.Context, fresh bool) error {
 	c.pingMu.Lock()
 	defer c.pingMu.Unlock()
-	if c.pingTTL > 0 && time.Since(c.pingAt) < c.pingTTL {
+	if !fresh && c.pingTTL > 0 && time.Since(c.pingAt) < c.pingTTL {
 		return c.pingErr
 	}
 	err := c.pingNow(ctx)
