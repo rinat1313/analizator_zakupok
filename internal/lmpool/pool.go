@@ -51,12 +51,14 @@ type Pool struct {
 }
 
 type Status struct {
-	Total     int              `json:"total"`
-	Healthy   int              `json:"healthy"`
-	Busy      int              `json:"busy"`
-	Available int              `json:"available"`
-	MaxParallel int            `json:"max_parallel"`
-	Endpoints []EndpointStatus `json:"endpoints"`
+	Total         int              `json:"total"`
+	Healthy       int              `json:"healthy"`
+	Busy          int              `json:"busy"`
+	Available     int              `json:"available"`
+	MaxParallel   int              `json:"max_parallel"`
+	Hosts         int              `json:"hosts"`          // уникальных base_url в пуле
+	HealthyHosts  int              `json:"healthy_hosts"`  // уникальных base_url с ≥1 healthy слотом
+	Endpoints     []EndpointStatus `json:"endpoints"`
 }
 
 type EndpointStatus struct {
@@ -277,6 +279,8 @@ func (p *Pool) HealthyCount() int {
 
 func (p *Pool) Status() Status {
 	st := Status{Total: len(p.slots), MaxParallel: p.MaxParallel()}
+	hostsAll := map[string]struct{}{}
+	hostsOK := map[string]struct{}{}
 	for _, s := range p.slots {
 		errStr, _ := s.lastErr.Load().(string)
 		es := EndpointStatus{
@@ -287,14 +291,18 @@ func (p *Pool) Status() Status {
 			Busy:    s.busy.Load(),
 			Error:   errStr,
 		}
+		hostsAll[s.cfg.BaseURL] = struct{}{}
 		if es.Healthy {
 			st.Healthy++
+			hostsOK[s.cfg.BaseURL] = struct{}{}
 		}
 		if es.Busy {
 			st.Busy++
 		}
 		st.Endpoints = append(st.Endpoints, es)
 	}
+	st.Hosts = len(hostsAll)
+	st.HealthyHosts = len(hostsOK)
 	st.Available = st.Healthy - st.Busy
 	if st.Available < 0 {
 		st.Available = 0

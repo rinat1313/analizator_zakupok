@@ -80,11 +80,13 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLMPool(w http.ResponseWriter, r *http.Request) {
 	if s.pool == nil {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"total":        1,
-			"healthy":      1,
-			"busy":         0,
-			"available":    1,
-			"max_parallel": 1,
+			"total":         1,
+			"healthy":       1,
+			"busy":          0,
+			"available":     1,
+			"max_parallel":  1,
+			"hosts":         1,
+			"healthy_hosts": 1,
 			"endpoints": []map[string]any{{
 				"name": "default", "base_url": s.llm.BaseURL(), "model": s.llm.Model(), "healthy": true,
 			}},
