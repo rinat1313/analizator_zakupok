@@ -1,26 +1,20 @@
-# Единственный источник списка LM Studio для analizator.
-# ./up.sh --ai этот файл НЕ перезаписывает.
+# LM endpoints — только из этого файла (./up.sh / up.ps1 НЕ перезаписывают).
+# Подставьте свои URL LM Studio (OpenAI-compatible /v1).
 #
-# На Mac (Docker bridge) — ОДИН URL на один физический LMS:
-#   http://10.2.12.111:1234/v1
-# Не дублируйте тем же сервером host.docker.internal / 127.0.0.1.
+# Docker (Mac/Windows Desktop): часто host.docker.internal:1234
+# Linux / host-net: 127.0.0.1:1234
+# Другая машина в LAN: http://192.168.x.x:1234/v1
 #
-# Пример второго сервера (раскомментируйте блок целиком):
-# - base_url: http://172.25.16.1:1234/v1
-#   api_key: lm-studio
-#   model: qwen/qwen3-vl-4b
-#   name: lm-win
-#   concurrent: 2
+# model id: curl http://HOST:1234/v1/models  → поле "id"
 #
 # Проверка:
-#   curl -s http://10.2.12.111:1234/v1/models | head
 #   curl -s http://127.0.0.1:8088/api/v1/lm/pool
 
 endpoints:
-  - base_url: http://10.2.12.111:1234/v1
+  - base_url: http://host.docker.internal:1234/v1
     api_key: lm-studio
     model: qwen/qwen3-8b
-    name: lm-mac
+    name: lm-primary
     concurrent: 4
 
 health_interval_sec: 10
