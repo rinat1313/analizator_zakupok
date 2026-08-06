@@ -1,23 +1,38 @@
-# Список доступных LM Studio (OpenAI-compatible /v1).
-# Анализатор проверяет доступность и параллелит AI по числу живых endpoint'ов
-# (не больше ~90% CPU хоста).
+# Единственный источник списка LM Studio для analizator.
+# ./up.sh --ai этот файл НЕ перезаписывает.
 #
-# Переменная LM_STUDIO_ENDPOINTS_FILE может указать другой путь.
-# Если файл пуст/отсутствует — используется LM_STUDIO_BASE_URL из окружения.
+# Analizator в режиме LAN (docker-compose.analizator-lan.yml) → network_mode=host.
+#
+# IP и model id должны совпадать с тем, что отвечает LM Studio:
+#   curl -s http://HOST:1234/v1/models   → поле "id"
+#
+# Текущие хосты (из логов LMS):
+#   Mac:     10.2.12.111:1234  → qwen/qwen3-8b
+#   Windows: 172.25.16.1:1234  → qwen/qwen3-vl-4b
+#   localhost (тот же Mac LMS при host-net)
+#
+# Проверка:
+#   curl -s http://10.2.12.111:1234/v1/models | head
+#   ./scripts/probe-lm-lan.sh
+#   curl -s http://127.0.0.1:8088/api/v1/lm/pool
 
 endpoints:
+  - base_url: http://10.2.12.111:1234/v1
+    api_key: lm-studio
+    model: qwen/qwen3-8b
+    name: lm-mac-111
+    concurrent: 4
+  - base_url: http://172.25.16.1:1234/v1
+    api_key: lm-studio
+    model: qwen/qwen3-vl-4b
+    name: lm-win-172
+    concurrent: 2
   - base_url: http://127.0.0.1:1234/v1
     api_key: lm-studio
     model: qwen/qwen3-8b
-    name: local-1
-  # - base_url: http://192.168.1.20:1234/v1
-  #   api_key: lm-studio
-  #   model: qwen/qwen3-8b
-  #   name: remote-2
-  # - base_url: http://192.168.1.21:1234/v1
-  #   api_key: lm-studio
-  #   model: qwen/qwen3-8b
-  #   name: remote-3
+    name: lm-local
+    concurrent: 2
 
-# Как часто перепроверять доступность (секунды).
-health_interval_sec: 15
+health_interval_sec: 10
+context_length: 8192
+thinking: false
