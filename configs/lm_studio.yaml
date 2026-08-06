@@ -1,19 +1,16 @@
 # Единственный источник списка LM Studio для analizator.
 # ./up.sh --ai этот файл НЕ перезаписывает.
 #
-# Analizator в режиме LAN (docker-compose.analizator-lan.yml) → network_mode=host.
+# На Mac (Docker bridge):
+#   - LMS на этой же машине: 10.2.12.111 ИЛИ host.docker.internal
+#   - НЕ используйте 127.0.0.1 в yaml из контейнера без rewrite
+#     (rewrite всё же переписывает 127.0.0.1 → host.docker.internal)
 #
-# IP и model id должны совпадать с тем, что отвечает LM Studio:
-#   curl -s http://HOST:1234/v1/models   → поле "id"
-#
-# Текущие хосты (из логов LMS):
-#   Mac:     10.2.12.111:1234  → qwen/qwen3-8b
-#   Windows: 172.25.16.1:1234  → qwen/qwen3-vl-4b
-#   localhost (тот же Mac LMS при host-net)
+# Windows LMS добавляйте только если реально отвечает:
+#   curl -s http://IP:1234/v1/models
 #
 # Проверка:
 #   curl -s http://10.2.12.111:1234/v1/models | head
-#   ./scripts/probe-lm-lan.sh
 #   curl -s http://127.0.0.1:8088/api/v1/lm/pool
 
 endpoints:
@@ -22,15 +19,10 @@ endpoints:
     model: qwen/qwen3-8b
     name: lm-mac-111
     concurrent: 4
-  - base_url: http://172.25.16.1:1234/v1
-    api_key: lm-studio
-    model: qwen/qwen3-vl-4b
-    name: lm-win-172
-    concurrent: 2
-  - base_url: http://127.0.0.1:1234/v1
+  - base_url: http://host.docker.internal:1234/v1
     api_key: lm-studio
     model: qwen/qwen3-8b
-    name: lm-local
+    name: lm-docker-host
     concurrent: 2
 
 health_interval_sec: 10

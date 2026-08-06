@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,11 +16,14 @@ import (
 )
 
 // EndpointConfig — одна LM Studio.
+// Concurrent > 1 создаёт несколько слотов на один base_url
+// (удобно для одного сервера с lms load --parallel N).
 type EndpointConfig struct {
-	Name    string `yaml:"name" json:"name"`
-	BaseURL string `yaml:"base_url" json:"base_url"`
-	APIKey  string `yaml:"api_key" json:"api_key"`
-	Model   string `yaml:"model" json:"model"`
+	Name       string `yaml:"name" json:"name"`
+	BaseURL    string `yaml:"base_url" json:"base_url"`
+	APIKey     string `yaml:"api_key" json:"api_key"`
+	Model      string `yaml:"model" json:"model"`
+	Concurrent int    `yaml:"concurrent" json:"concurrent"`
 }
 
 type FileConfig struct {
@@ -96,11 +99,10 @@ func Load(path string, fallback lmstudio.Options) (*Pool, error) {
 
 	seen := map[string]bool{}
 	add := func(ep EndpointConfig) {
-		ep.BaseURL = strings.TrimRight(strings.TrimSpace(ep.BaseURL), "/")
-		if ep.BaseURL == "" || seen[ep.BaseURL] {
+		ep.BaseURL = rewriteDockerLocalhost(strings.TrimRight(strings.TrimSpace(ep.BaseURL), "/"))
+		if ep.BaseURL == "" {
 			return
 		}
-		seen[ep.BaseURL] = true
 		if ep.APIKey == "" {
 			ep.APIKey = fallback.APIKey
 		}
@@ -113,35 +115,87 @@ func Load(path string, fallback lmstudio.Options) (*Pool, error) {
 		if ep.Name == "" {
 			ep.Name = ep.BaseURL
 		}
-		cl := lmstudio.New(lmstudio.Options{
-			BaseURL:     ep.BaseURL,
-			APIKey:      ep.APIKey,
-			Model:       ep.Model,
-			Timeout:     p.timeout,
-			Temperature: p.temp,
-			MaxTokens:   p.maxTok,
-		})
-		s := &slot{cfg: ep, client: cl}
-		s.healthy.Store(true) // optimistic until first health fail
-		s.lastErr.Store("")
-		p.slots = append(p.slots, s)
+		n := ep.Concurrent
+		if n < 1 {
+			n = 1
+		}
+		for i := 0; i < n; i++ {
+			key := fmt.Sprintf("%s#%d", ep.BaseURL, i)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			cfg := ep
+			cfg.Concurrent = 1
+			if n > 1 {
+				cfg.Name = fmt.Sprintf("%s-%d", ep.Name, i+1)
+			}
+			cl := lmstudio.New(lmstudio.Options{
+				BaseURL:     cfg.BaseURL,
+				APIKey:      cfg.APIKey,
+				Model:       cfg.Model,
+				Timeout:     p.timeout,
+				Temperature: p.temp,
+				MaxTokens:   p.maxTok,
+			})
+			s := &slot{cfg: cfg, client: cl}
+			s.healthy.Store(true) // optimistic until first health fail
+			s.lastErr.Store("")
+			p.slots = append(p.slots, s)
+		}
 	}
 
 	for _, ep := range fc.Endpoints {
 		add(ep)
 	}
-	if fallback.BaseURL != "" {
+	// Env LM_STUDIO_BASE_URL — только если yaml пуст (иначе дубли и путаница).
+	if len(fc.Endpoints) == 0 && fallback.BaseURL != "" {
 		add(EndpointConfig{
-			Name:    "env-default",
-			BaseURL: fallback.BaseURL,
-			APIKey:  fallback.APIKey,
-			Model:   fallback.Model,
+			Name:       "env-default",
+			BaseURL:    fallback.BaseURL,
+			APIKey:     fallback.APIKey,
+			Model:      fallback.Model,
+			Concurrent: 4,
 		})
 	}
 	if len(p.slots) == 0 {
 		return nil, fmt.Errorf("lmpool: no LM Studio endpoints configured")
 	}
+	log.Printf("lmpool: %d slots (max_parallel cap=%d)", len(p.slots), envMaxParallel())
 	return p, nil
+}
+
+// rewriteDockerLocalhost меняет 127.0.0.1/localhost → host.docker.internal
+// внутри контейнера (иначе LM Studio на Mac недоступен).
+func rewriteDockerLocalhost(u string) string {
+	if u == "" || os.Getenv("LM_STUDIO_REWRITE_LOCALHOST") == "0" {
+		return u
+	}
+	inDocker := os.Getenv("ZAKUPKI_IN_DOCKER") == "1"
+	if !inDocker {
+		if _, err := os.Stat("/.dockerenv"); err == nil {
+			inDocker = true
+		}
+	}
+	if !inDocker {
+		return u
+	}
+	repls := []struct{ old, neu string }{
+		{"http://127.0.0.1:", "http://host.docker.internal:"},
+		{"http://localhost:", "http://host.docker.internal:"},
+		{"https://127.0.0.1:", "https://host.docker.internal:"},
+		{"https://localhost:", "https://host.docker.internal:"},
+	}
+	for _, r := range repls {
+		if strings.HasPrefix(u, r.old) {
+			out := r.neu + strings.TrimPrefix(u, r.old)
+			if out != u {
+				log.Printf("lmpool: rewrite %s → %s (docker)", u, out)
+			}
+			return out
+		}
+	}
+	return u
 }
 
 func (p *Pool) StartHealth(ctx context.Context) {
@@ -181,28 +235,32 @@ func (p *Pool) Refresh(ctx context.Context) {
 	wg.Wait()
 }
 
-func cpuCap() int {
-	n := runtime.NumCPU()
-	// не более CPU − 10% (минимум 1)
-	cut := n / 10
-	if cut < 1 && n > 1 {
-		cut = 1
+func envMaxParallel() int {
+	const defaultMax = 4
+	v := strings.TrimSpace(os.Getenv("LM_MAX_PARALLEL"))
+	if v == "" {
+		return defaultMax
 	}
-	out := n - cut
-	if out < 1 {
-		out = 1
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 {
+		return defaultMax
 	}
-	return out
+	if n > 64 {
+		return 64
+	}
+	return n
 }
 
 func (p *Pool) MaxParallel() int {
 	h := p.HealthyCount()
-	cap := cpuCap()
 	if h < 1 {
-		return 1
+		return 0
 	}
-	if h > cap {
-		return cap
+	// Параллелизм = число живых слотов LM Studio, не CPU контейнера analizator
+	// (LLM крутится на хосте). Потолок по умолчанию 4 (LM_MAX_PARALLEL).
+	maxN := envMaxParallel()
+	if h > maxN {
+		return maxN
 	}
 	return h
 }
