@@ -1,21 +1,22 @@
 # Единственный источник списка LM Studio для analizator.
 # ./up.sh --ai этот файл НЕ перезаписывает.
 #
-# Analizator в режиме LAN (docker-compose.analizator-lan.yml) идёт через
-# network_mode=host — локальный LMS = 127.0.0.1.
+# Analizator в режиме LAN (docker-compose.analizator-lan.yml) → network_mode=host.
 #
-# Серверы:
-#   192.168.1.124:1234  — машина в LAN
-#   172.25.16.1:1234    — ещё один хост LMS (Docker/WSL gateway / LAN)
-#   127.0.0.1:1234      — LM Studio на этом Mac
+# Основной: 10.2.12.130:1234  — машина с LM Studio
+# Резерв:   192.168.1.124 / 172.25.16.1 / 127.0.0.1
 #
-# Проверка:
-#   curl -s http://172.25.16.1:1234/v1/models | head
-#   curl -s http://192.168.1.124:1234/v1/models | head
+# Проверка с Mac:
+#   curl -s http://10.2.12.130:1234/v1/models | head
 #   ./scripts/probe-lm-lan.sh
 #   curl -s http://127.0.0.1:8088/api/v1/lm/pool
 
 endpoints:
+  - base_url: http://10.2.12.130:1234/v1
+    api_key: lm-studio
+    model: qwen/qwen3-8b
+    name: lm-130
+    concurrent: 4
   - base_url: http://192.168.1.124:1234/v1
     api_key: lm-studio
     model: qwen/qwen3-8b
