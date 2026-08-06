@@ -3,29 +3,29 @@
 #
 # Analizator в режиме LAN (docker-compose.analizator-lan.yml) → network_mode=host.
 #
-# Основной: 10.2.12.130:1234  — машина с LM Studio
-# Резерв:   192.168.1.124 / 172.25.16.1 / 127.0.0.1
+# IP и model id должны совпадать с тем, что отвечает LM Studio:
+#   curl -s http://HOST:1234/v1/models   → поле "id"
 #
-# Проверка с Mac:
-#   curl -s http://10.2.12.130:1234/v1/models | head
+# Текущие хосты (из логов LMS):
+#   Mac:     10.2.12.111:1234  → qwen/qwen3-8b
+#   Windows: 172.25.16.1:1234  → qwen/qwen3-vl-4b
+#   localhost (тот же Mac LMS при host-net)
+#
+# Проверка:
+#   curl -s http://10.2.12.111:1234/v1/models | head
 #   ./scripts/probe-lm-lan.sh
 #   curl -s http://127.0.0.1:8088/api/v1/lm/pool
 
 endpoints:
-  - base_url: http://10.2.12.130:1234/v1
+  - base_url: http://10.2.12.111:1234/v1
     api_key: lm-studio
     model: qwen/qwen3-8b
-    name: lm-130
+    name: lm-mac-111
     concurrent: 4
-  - base_url: http://192.168.1.124:1234/v1
-    api_key: lm-studio
-    model: qwen/qwen3-8b
-    name: lm-124
-    concurrent: 2
   - base_url: http://172.25.16.1:1234/v1
     api_key: lm-studio
-    model: qwen/qwen3-8b
-    name: lm-172
+    model: qwen/qwen3-vl-4b
+    name: lm-win-172
     concurrent: 2
   - base_url: http://127.0.0.1:1234/v1
     api_key: lm-studio
