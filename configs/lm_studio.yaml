@@ -15,7 +15,7 @@ endpoints:
     api_key: lm-studio
     model: qwen/qwen3-8b
     name: lm-primary
-    concurrent: 4
+    concurrent: 1
 
 health_interval_sec: 10
 context_length: 8192

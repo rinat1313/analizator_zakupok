@@ -157,7 +157,7 @@ func Load(path string, fallback lmstudio.Options) (*Pool, error) {
 			BaseURL:    fallback.BaseURL,
 			APIKey:     fallback.APIKey,
 			Model:      fallback.Model,
-			Concurrent: 4,
+			Concurrent: 1,
 		})
 	}
 	if len(p.slots) == 0 {
@@ -238,7 +238,7 @@ func (p *Pool) Refresh(ctx context.Context) {
 }
 
 func envMaxParallel() int {
-	const defaultMax = 4
+	const defaultMax = 1
 	v := strings.TrimSpace(os.Getenv("LM_MAX_PARALLEL"))
 	if v == "" {
 		return defaultMax
@@ -259,7 +259,8 @@ func (p *Pool) MaxParallel() int {
 		return 0
 	}
 	// Параллелизм = число живых слотов LM Studio, не CPU контейнера analizator
-	// (LLM крутится на хосте). Потолок по умолчанию 4 (LM_MAX_PARALLEL).
+	// (LLM крутится на хосте). Потолок по умолчанию 1 (LM_MAX_PARALLEL) —
+	// один слот / одна модель / один сервер, иначе контекст LMS переполняется.
 	maxN := envMaxParallel()
 	if h > maxN {
 		return maxN
