@@ -3,8 +3,21 @@
 ### Health
 GET http://127.0.0.1:8088/health
 
+### Health with LM probe
+GET http://127.0.0.1:8088/health?lm=1
+
+### OpenAPI / Swagger
+GET http://127.0.0.1:8088/openapi.yaml
+GET http://127.0.0.1:8088/swagger/
+
 ### List checklists
 GET http://127.0.0.1:8088/api/v1/checklists
+
+### LM pool status
+GET http://127.0.0.1:8088/api/v1/lm/pool
+
+### LM smoke test
+POST http://127.0.0.1:8088/api/v1/lm/smoke
 
 ### Analyze tender from ZakupkiParser result/
 POST http://127.0.0.1:8088/api/v1/analyze
@@ -24,6 +37,9 @@ Content-Type: application/json
   "checklist_id": "quick",
   "text": "Извещение о закупке. Предмет: бумага офисная А4 80 г/м2. НМЦК: 500 000 руб. Срок подачи заявок: 5 рабочих дней. Обеспечение заявки: 5%. Требуется опыт исполнения 3 контрактов за последние 3 года."
 }
+
+### Analyze progress
+GET http://127.0.0.1:8088/api/v1/analyze/progress/0334500000125000001
 
 ### Get analysis
 GET http://127.0.0.1:8088/api/v1/analysis/0334500000125000001

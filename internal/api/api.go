@@ -46,6 +46,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/lm/pool", s.handleLMPool)
 	s.mux.HandleFunc("POST /api/v1/lm/smoke", s.handleLMSmoke)
 	s.mux.HandleFunc("GET /api/v1/analysis/{reg}", s.handleGetAnalysis)
+	s.mux.HandleFunc("GET /openapi.yaml", s.handleOpenAPI)
+	s.mux.HandleFunc("GET /swagger", s.handleSwaggerRedirect)
+	s.mux.HandleFunc("GET /swagger/", s.handleSwaggerUI)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
