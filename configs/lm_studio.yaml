@@ -1,23 +1,16 @@
-# Список доступных LM Studio (OpenAI-compatible /v1).
-# Анализатор проверяет доступность и параллелит AI по числу живых endpoint'ов
-# (не больше ~90% CPU хоста).
+# Единственная LM Studio (OpenAI-compatible /v1).
+# Режим: single exclusive — max_parallel=1, один анализ за раз.
+# Параллельные слоты/несколько endpoint'ов не используются.
 #
+# Приоритет URL: переменная LM_STUDIO_BASE_URL (если задана),
+# иначе первый (и единственный) endpoint из этого файла.
 # Переменная LM_STUDIO_ENDPOINTS_FILE может указать другой путь.
-# Если файл пуст/отсутствует — используется LM_STUDIO_BASE_URL из окружения.
 
 endpoints:
   - base_url: http://127.0.0.1:1234/v1
     api_key: lm-studio
     model: qwen/qwen3-8b
-    name: local-1
-  # - base_url: http://192.168.1.20:1234/v1
-  #   api_key: lm-studio
-  #   model: qwen/qwen3-8b
-  #   name: remote-2
-  # - base_url: http://192.168.1.21:1234/v1
-  #   api_key: lm-studio
-  #   model: qwen/qwen3-8b
-  #   name: remote-3
+    name: default
 
-# Как часто перепроверять доступность (секунды).
+# Как часто перепроверять доступность (секунды). Ping: GET /v1/models.
 health_interval_sec: 15

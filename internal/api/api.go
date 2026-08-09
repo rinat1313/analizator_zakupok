@@ -124,6 +124,10 @@ func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, res)
 			return
 		}
+		if strings.Contains(err.Error(), "LLM занята") {
+			writeErr(w, http.StatusConflict, err.Error())
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -163,7 +167,11 @@ func (s *Server) handleLMSmoke(w http.ResponseWriter, r *http.Request) {
 		{Role: "user", Content: "Скажи: ок"},
 	}, 32)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]any{
+		code := http.StatusBadGateway
+		if strings.Contains(err.Error(), "LLM занята") {
+			code = http.StatusConflict
+		}
+		writeJSON(w, code, map[string]any{
 			"ok":     false,
 			"error":  err.Error(),
 			"lm_url": s.llm.BaseURL(),

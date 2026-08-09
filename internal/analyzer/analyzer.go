@@ -27,12 +27,17 @@ type Service struct {
 	progress *progress.Tracker
 }
 
-// LLM — LM Studio клиент или пул endpoint'ов.
+// LLM — клиент LM Studio (single exclusive).
 type LLM interface {
 	ChatMaxTokens(ctx context.Context, messages []lmstudio.Message, maxTokens int) (string, string, error)
 	Ping(ctx context.Context) error
 	Model() string
 	BaseURL() string
+}
+
+// exclusiveHolder — опционально: захват LLM на весь анализ (1 процесс).
+type exclusiveHolder interface {
+	TryHold(ctx context.Context) (context.Context, func(), bool)
 }
 
 func New(cfg config.Config, llm LLM, st *store.Store) *Service {
@@ -92,6 +97,17 @@ func (s *Service) Analyze(ctx context.Context, req Request) (*store.AnalysisResu
 	req.Text = strings.TrimSpace(req.Text)
 	if req.RegNumber == "" && req.Text == "" {
 		return nil, fmt.Errorf("нужен reg_number и/или text")
+	}
+
+	// Эксклюзивный доступ к единственной LLM: второй анализ не стартует
+	// и не отправляет порции, пока первый не завершится.
+	if holder, ok := s.llm.(exclusiveHolder); ok {
+		heldCtx, release, got := holder.TryHold(ctx)
+		if !got {
+			return nil, fmt.Errorf("LLM занята: уже выполняется другой анализ — дождитесь завершения")
+		}
+		defer release()
+		ctx = heldCtx
 	}
 
 	id := req.RegNumber

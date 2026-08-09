@@ -183,7 +183,8 @@ go run ./cmd/parser -limit 1 -analyze-url http://127.0.0.1:8088
 |---------|----------------|
 | `lm_studio unavailable` | сервер в LM Studio, IP, порт 1234, Serve on Local Network, фаервол |
 | пустой/кривой JSON от модели | другая модель; упростить промпт; снизить temperature (`LM_TEMPERATURE=0.1`) |
-| анализ долго / OOM | уменьшить `MAX_CHUNKS`, `CHUNK_SIZE`, `CONCURRENCY=1` |
+| анализ долго / OOM | уменьшить `PAGE_CHARS`, `DOSE_PAGES`, `CONTEXT_BUDGET_CHARS` |
+| `LLM занята` / HTTP 409 | уже идёт другой анализ — режим single exclusive (1 процесс на LLM) |
 | «тендер не найден» | `TENDERS_ROOT` указывает на `DataCode/result` парсера |
 | правила не применились | неверный `checklist_id`; опечатка в имени файла YAML |
 

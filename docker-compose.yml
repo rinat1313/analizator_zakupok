@@ -49,7 +49,7 @@ services:
       CHUNK_SIZE: ${CHUNK_SIZE:-3500}
       CHUNK_OVERLAP: ${CHUNK_OVERLAP:-250}
       MAX_CHUNKS: ${MAX_CHUNKS:-40}
-      CONCURRENCY: ${CONCURRENCY:-2}
+      CONCURRENCY: ${CONCURRENCY:-1}
       # Раскомментируйте вместе с profile db:
       # DATABASE_URL: postgres://zakupki:zakupki@postgres:5432/zakupki?sslmode=disable
     volumes:
