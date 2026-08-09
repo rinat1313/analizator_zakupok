@@ -106,7 +106,7 @@ func (s *Server) handleListChecklists(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request) {
 	var req analyzer.Request
 	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
+	// Не DisallowUnknownFields: platform/UI может добавлять поля (config_id и т.п.).
 	if err := dec.Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid json: "+err.Error())
 		return
@@ -116,12 +116,18 @@ func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("analyze start reg=%q checklist=%q text_len=%d title=%q", req.RegNumber, req.ChecklistID, len(req.Text), req.Title)
+	log.Printf("analyze start reg=%q checklist=%q config=%q text_len=%d title=%q",
+		req.RegNumber, req.ChecklistID, req.ConfigName, len(req.Text), req.Title)
 	res, err := s.svc.Analyze(r.Context(), req)
 	if err != nil {
 		log.Printf("analyze end reg=%q err=%v", req.RegNumber, err)
 		if res != nil {
 			writeJSON(w, http.StatusOK, res)
+			return
+		}
+		// Отмена ожидания очереди / StopAnalyze в core → 499-подобно через 503/client cancel.
+		if strings.Contains(err.Error(), "отменено") || strings.Contains(err.Error(), "canceled") || strings.Contains(err.Error(), "cancelled") {
+			writeErr(w, http.StatusServiceUnavailable, err.Error())
 			return
 		}
 		writeErr(w, http.StatusInternalServerError, err.Error())
@@ -163,7 +169,11 @@ func (s *Server) handleLMSmoke(w http.ResponseWriter, r *http.Request) {
 		{Role: "user", Content: "Скажи: ок"},
 	}, 32)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]any{
+		code := http.StatusBadGateway
+		if strings.Contains(err.Error(), "LLM занята") {
+			code = http.StatusConflict
+		}
+		writeJSON(w, code, map[string]any{
 			"ok":     false,
 			"error":  err.Error(),
 			"lm_url": s.llm.BaseURL(),

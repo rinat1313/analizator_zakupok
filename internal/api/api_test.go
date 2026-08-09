@@ -59,6 +59,33 @@ func TestHealthAndChecklists(t *testing.T) {
 	}
 }
 
+func TestAnalyzeAcceptsConfigIDAlias(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Config{
+		TendersRoot:     root,
+		ChecklistsDir:   filepath.Join("..", "..", "configs", "checklists"),
+		DefaultList:     "quick",
+		LMStudioBaseURL: "http://127.0.0.1:1/v1",
+		ChunkSize:       1000,
+		Concurrency:     1,
+	}
+	st, _ := store.New(root, "")
+	defer st.Close()
+	llm := lmstudio.New(lmstudio.Options{BaseURL: cfg.LMStudioBaseURL, Model: "x"})
+	svc := analyzer.New(cfg, llm, st)
+	srv := api.New(cfg, svc, st, llm)
+
+	// Unknown extra field + config_id alias must not 400 on decode.
+	body := []byte(`{"reg_number":"1","text":"hello","config_id":"cfg-uuid","extra_ui_field":true}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/analyze", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code == http.StatusBadRequest {
+		t.Fatalf("unexpected 400: %s", rr.Body.String())
+	}
+}
+
 func TestAnalyzeValidation(t *testing.T) {
 	root := t.TempDir()
 	cfg := config.Config{

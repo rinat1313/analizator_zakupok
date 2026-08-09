@@ -183,7 +183,8 @@ go run ./cmd/parser -limit 1 -analyze-url http://127.0.0.1:8088
 |---------|----------------|
 | `lm_studio unavailable` | сервер в LM Studio, IP, порт 1234, Serve on Local Network, фаервол |
 | пустой/кривой JSON от модели | другая модель; упростить промпт; снизить temperature (`LM_TEMPERATURE=0.1`) |
-| анализ долго / OOM | уменьшить `MAX_CHUNKS`, `CHUNK_SIZE`, `CONCURRENCY=1` |
+| анализ долго / OOM | уменьшить `PAGE_CHARS`, `DOSE_PAGES`, `CONTEXT_BUDGET_CHARS` |
+| `LLM занята` / HTTP 409 | уже идёт другой анализ — режим single exclusive (1 процесс на LLM) |
 | «тендер не найден» | `TENDERS_ROOT` указывает на `DataCode/result` парсера |
 | правила не применились | неверный `checklist_id`; опечатка в имени файла YAML |
 
@@ -202,11 +203,37 @@ DEFAULT_CHECKLIST=default
 
 ---
 
-## 10. Связка с Zakupki Platform
+## 10. Связка с Zakupki Platform / UI «Поисковики»
 
-Platform (`ZakupkiParser/platform`) хранит тексты документов в Postgres и вызывает:
+Поток UI (gateway searchers → search → core → analizator):
 
-`POST {ANALIZATOR_URL}/api/v1/analyze` с полем `text` (корпус из карточки + documents).
+1. Пользователь выбирает **настройку поиска** и включает `auto_ai` на неё.
+2. Поиск кладёт тендеры в core (`search_config_id`).
+3. Core обрабатывает документы; когда есть `text_content`, шлёт в analizator.
+4. Analizator работает в режиме **1 LLM / очередь**: параллельные запросы ждут слот
+   (`phase=queued` → `prepare` → `dose` → `synthesize` → `done`), не отдают 409 «занята»
+   (иначе UI рисует карточку как «ошибка / прочее»).
 
-Ответ сохраняется в `tender_assessments`; ручные чек-листы/промпты настраиваются здесь же (§4–5).
+Тело от core:
+
+```json
+{
+  "reg_number": "…",
+  "text": "корпус карточки + ### Документ: …",
+  "title": "…",
+  "checklist_id": "<ai_config uuid>",
+  "config_id": "<alias>",
+  "config_name": "…",
+  "system_prompt": "…",
+  "user_prompt": "…",
+  "rules": "…"
+}
+```
+
+Ответ для UI pills (`Да` / `Нет` / `С оговорками`):
+
+- `recommendation`: `participate|caution|skip|unknown`
+- `summary`: начинается с `Да:` / `Нет:` / `С оговорками:`
+- `risks`, `actions`, `items` — всегда массивы (не `null`)
+- прогресс: `GET /api/v1/analyze/progress/{reg}` → `percent`, `phase` (core пишет в `ai_pct`)
 

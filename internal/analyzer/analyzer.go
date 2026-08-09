@@ -27,12 +27,17 @@ type Service struct {
 	progress *progress.Tracker
 }
 
-// LLM — LM Studio клиент или пул endpoint'ов.
+// LLM — клиент LM Studio (single exclusive).
 type LLM interface {
 	ChatMaxTokens(ctx context.Context, messages []lmstudio.Message, maxTokens int) (string, string, error)
 	Ping(ctx context.Context) error
 	Model() string
 	BaseURL() string
+}
+
+// exclusiveHolder — опционально: очередь на единственную LLM (UI auto-AI).
+type exclusiveHolder interface {
+	Hold(ctx context.Context) (context.Context, func(), error)
 }
 
 func New(cfg config.Config, llm LLM, st *store.Store) *Service {
@@ -46,11 +51,12 @@ func New(cfg config.Config, llm LLM, st *store.Store) *Service {
 
 func (s *Service) Progress() *progress.Tracker { return s.progress }
 
-// Request вход анализа.
+// Request вход анализа (platform UI / core → analizator).
 type Request struct {
 	RegNumber    string `json:"reg_number"`
 	Text         string `json:"text"`
 	ChecklistID  string `json:"checklist_id"`
+	ConfigID     string `json:"config_id"` // alias от UI/core (AI config uuid)
 	Title        string `json:"title"`
 	ConfigName   string `json:"config_name"`
 	SystemPrompt string `json:"system_prompt"`
@@ -93,10 +99,28 @@ func (s *Service) Analyze(ctx context.Context, req Request) (*store.AnalysisResu
 	if req.RegNumber == "" && req.Text == "" {
 		return nil, fmt.Errorf("нужен reg_number и/или text")
 	}
+	if strings.TrimSpace(req.ChecklistID) == "" && strings.TrimSpace(req.ConfigID) != "" {
+		req.ChecklistID = strings.TrimSpace(req.ConfigID)
+	}
 
 	id := req.RegNumber
 	if id == "" {
 		id = "text-" + time.Now().Format("20060102-150405")
+	}
+
+	// Сразу показываем прогресс UI (ai_pct), даже если ждём очередь к LLM.
+	s.progress.Set(id, progress.Info{Percent: 2, Phase: "queued"})
+	defer s.progress.Clear(id)
+
+	// Эксклюзивная очередь: один анализ → одна LLM. Остальные ждут (не 409),
+	// чтобы core/UI не помечали карточки как «ошибка / прочее».
+	if holder, ok := s.llm.(exclusiveHolder); ok {
+		heldCtx, release, err := holder.Hold(ctx)
+		if err != nil {
+			return nil, err
+		}
+		defer release()
+		ctx = heldCtx
 	}
 
 	started := time.Now().UTC().Format(time.RFC3339)
@@ -118,10 +142,12 @@ func (s *Service) Analyze(ctx context.Context, req Request) (*store.AnalysisResu
 		ChecklistID:   checklistID,
 		ChecklistName: checklistName,
 		StartedAt:     started,
+		Items:         []store.ItemResult{},
+		Risks:         []string{},
+		Actions:       []string{},
 	}
 
 	s.progress.Set(id, progress.Info{Percent: 3, Phase: "prepare"})
-	defer s.progress.Clear(id)
 
 	var law, title string
 	var sourceNames []string
@@ -244,17 +270,20 @@ func (s *Service) Analyze(ctx context.Context, req Request) (*store.AnalysisResu
 	pending.Status = "completed"
 	pending.Law = law
 	pending.Items = items
-	pending.Recommendation = synth.Recommendation
+	pending.Recommendation = normalizeRecommendation(synth.Recommendation)
 	pending.Score = synth.Score
-	pending.Summary = synth.Summary
-	pending.Risks = synth.Risks
-	pending.Actions = synth.Actions
+	pending.Summary = ensureSummaryPrefix(synth.Summary, pending.Recommendation)
+	pending.Risks = nonNilStrings(synth.Risks)
+	pending.Actions = nonNilStrings(synth.Actions)
 	pending.SourcesUsed = uniq(sourceNames)
 	pending.ChunksTotal = len(doses)
 	pending.ChunksUsed = len(briefs)
 	pending.AnalyzedAt = time.Now().UTC().Format(time.RFC3339)
 	pending.RawSynthesize = synth.Raw
 	pending.Error = ""
+	if pending.Items == nil {
+		pending.Items = []store.ItemResult{}
+	}
 
 	s.progress.Set(id, progress.Info{Percent: 100, DosesDone: len(doses), DosesTotal: len(doses), Phase: "done"})
 
@@ -436,20 +465,14 @@ func parseSynthJSON(content string) synthResult {
 			Recommendation: "unknown",
 			Score:          0.5,
 			Summary:        content,
+			Risks:          []string{},
+			Actions:        []string{},
 			Raw:            content,
 		}
 	}
-	raw.Recommendation = strings.ToLower(strings.TrimSpace(raw.Recommendation))
-	switch raw.Recommendation {
-	case "participate", "да", "yes":
-		raw.Recommendation = "participate"
-	case "caution", "осторожно", "с оговорками":
-		raw.Recommendation = "caution"
-	case "skip", "нет", "no":
-		raw.Recommendation = "skip"
-	case "unknown":
-	default:
-		// Попробуем вывести из summary.
+	raw.Recommendation = normalizeRecommendation(raw.Recommendation)
+	if raw.Recommendation == "unknown" {
+		// Попробуем вывести из summary (UI pills: Да / Нет / С оговорками).
 		low := strings.ToLower(raw.Summary)
 		switch {
 		case strings.HasPrefix(low, "да:") || strings.HasPrefix(low, "да "):
@@ -458,12 +481,57 @@ func parseSynthJSON(content string) synthResult {
 			raw.Recommendation = "skip"
 		case strings.Contains(low, "оговорк"):
 			raw.Recommendation = "caution"
-		default:
-			raw.Recommendation = "unknown"
 		}
 	}
 	raw.Score = clamp01(raw.Score)
+	raw.Summary = ensureSummaryPrefix(raw.Summary, raw.Recommendation)
+	raw.Risks = nonNilStrings(raw.Risks)
+	raw.Actions = nonNilStrings(raw.Actions)
 	return raw
+}
+
+func normalizeRecommendation(rec string) string {
+	switch strings.ToLower(strings.TrimSpace(rec)) {
+	case "participate", "да", "yes":
+		return "participate"
+	case "caution", "осторожно", "с оговорками":
+		return "caution"
+	case "skip", "нет", "no":
+		return "skip"
+	case "unknown":
+		return "unknown"
+	default:
+		return "unknown"
+	}
+}
+
+// ensureSummaryPrefix — UI/alert ожидают «Да:» / «Нет:» / «С оговорками:».
+func ensureSummaryPrefix(summary, rec string) string {
+	summary = strings.TrimSpace(summary)
+	low := strings.ToLower(summary)
+	if strings.HasPrefix(low, "да:") || strings.HasPrefix(low, "нет:") || strings.HasPrefix(low, "с оговорками:") {
+		return summary
+	}
+	prefix := "Неясно:"
+	switch rec {
+	case "participate":
+		prefix = "Да:"
+	case "skip":
+		prefix = "Нет:"
+	case "caution":
+		prefix = "С оговорками:"
+	}
+	if summary == "" {
+		return prefix + " данных недостаточно."
+	}
+	return prefix + " " + summary
+}
+
+func nonNilStrings(in []string) []string {
+	if in == nil {
+		return []string{}
+	}
+	return in
 }
 
 func fallbackFromBriefs(briefs []doseBrief) synthResult {

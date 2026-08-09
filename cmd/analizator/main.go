@@ -44,7 +44,7 @@ func main() {
 	runCtx, runCancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer runCancel()
 	pool.StartHealth(runCtx)
-	log.Printf("lmpool: max_parallel=%d status=%+v", pool.MaxParallel(), pool.Status())
+	log.Printf("lmpool: mode=single_exclusive max_parallel=%d status=%+v", pool.MaxParallel(), pool.Status())
 
 	svc := analyzer.New(cfg, pool, st)
 	srv := api.New(cfg, svc, st, pool)
@@ -56,8 +56,8 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("analizator_zakupok listening on %s (tenders=%s lm_pool=%d model=%s)",
-			cfg.HTTPAddr, cfg.TendersRoot, pool.Status().Total, pool.Model())
+		log.Printf("analizator_zakupok listening on %s (tenders=%s llm=%s model=%s exclusive=1)",
+			cfg.HTTPAddr, cfg.TendersRoot, pool.BaseURL(), pool.Model())
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("http: %v", err)
 		}
