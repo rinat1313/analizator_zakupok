@@ -1,16 +1,16 @@
-# Единственная LM Studio (OpenAI-compatible /v1).
+# Единственная LM Studio на локальной машине (OpenAI-compatible /v1).
 # Режим: single exclusive — max_parallel=1, один анализ за раз.
-# Параллельные слоты/несколько endpoint'ов не используются.
 #
+# По умолчанию: http://127.0.0.1:1234/v1
 # Приоритет URL: переменная LM_STUDIO_BASE_URL (если задана),
-# иначе первый (и единственный) endpoint из этого файла.
-# Переменная LM_STUDIO_ENDPOINTS_FILE может указать другой путь.
+# иначе этот endpoint. LM_STUDIO_ENDPOINTS_FILE — другой путь к файлу.
 
 endpoints:
   - base_url: http://127.0.0.1:1234/v1
     api_key: lm-studio
-    model: qwen/qwen3-8b
-    name: default
+    model: local-model
+    name: local
+
 
 # Как часто перепроверять доступность (секунды). Ping: GET /v1/models.
 health_interval_sec: 15
