@@ -22,6 +22,9 @@ func main() {
 	if err := cfg.Validate(); err != nil {
 		log.Fatalf("config: %v", err)
 	}
+	if err := os.MkdirAll(cfg.TendersRoot, 0o755); err != nil {
+		log.Fatalf("tenders root %s: %v", cfg.TendersRoot, err)
+	}
 
 	st, err := store.New(cfg.TendersRoot, cfg.DatabaseURL)
 	if err != nil {

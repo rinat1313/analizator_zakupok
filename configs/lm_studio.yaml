@@ -1,9 +1,13 @@
-# Единственная LM Studio на локальной машине (OpenAI-compatible /v1).
-# Режим: single exclusive — max_parallel=1, один анализ за раз.
+# Единственная LM Studio (OpenAI-compatible /v1).
+# Режим: single exclusive — max_parallel=1.
 #
-# По умолчанию: http://127.0.0.1:1234/v1
-# Приоритет URL: переменная LM_STUDIO_BASE_URL (если задана),
-# иначе этот endpoint. LM_STUDIO_ENDPOINTS_FILE — другой путь к файлу.
+# Приоритет URL:
+#   1) переменная окружения LM_STUDIO_BASE_URL (если задана явно)
+#   2) этот файл (первый endpoint)
+#
+# Локально (go run на хосте):  http://127.0.0.1:1234/v1
+# Docker / zakupki-platform:    LM_STUDIO_BASE_URL=http://host.docker.internal:1234/v1
+#   (так задано в Dockerfile / Dockerfile.runtime)
 
 endpoints:
   - base_url: http://127.0.0.1:1234/v1
@@ -11,6 +15,4 @@ endpoints:
     model: local-model
     name: local
 
-
-# Как часто перепроверять доступность (секунды). Ping: GET /v1/models.
 health_interval_sec: 15

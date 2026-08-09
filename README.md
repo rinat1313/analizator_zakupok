@@ -54,7 +54,7 @@ docker compose up -d --build
 
 Сервис слушает `:8088`. Каталог тендеров — volume `tenders_data` (или смонтируйте `../DataCode/result`).
 
-По умолчанию LM Studio: `http://127.0.0.1:1234/v1` (compose с `network_mode: host`).
+LM Studio на хосте `:1234`. В Docker — `http://host.docker.internal:1234/v1`; локально (`go run`) — `http://127.0.0.1:1234/v1`.
 
 ## Совместно с ZakupkiParser
 
@@ -142,7 +142,7 @@ YAML в `configs/checklists/`:
 |------------|--------------|--------|
 | `HTTP_ADDR` | `:8088` | bind |
 | `TENDERS_ROOT` | `/data/tenders` | корень `result/` парсера |
-| `LM_STUDIO_BASE_URL` | `http://127.0.0.1:1234/v1` | OpenAI-compatible base (локальная LM Studio) |
+| `LM_STUDIO_BASE_URL` | `http://127.0.0.1:1234/v1` (host) / `host.docker.internal` (Docker) | OpenAI-compatible LM Studio |
 | `LM_STUDIO_MODEL` | `local-model` | id модели в LM Studio |
 | `LM_STUDIO_API_KEY` | `lm-studio` | любой непустой ключ |
 | `CHUNK_SIZE` | `3500` | размер куска (руны) |
