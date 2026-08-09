@@ -160,7 +160,7 @@ YAML в `configs/checklists/`:
 |-------|------|----------|
 | `GET` | `/health` | liveness + ping LM Studio |
 | `GET` | `/api/v1/checklists` | список чек-листов |
-| `POST` | `/api/v1/analyze` | запуск анализа |
+| `POST` | `/api/v1/analyze` | запуск анализа (очередь на 1 LLM; промпты из UI/core) |
 | `GET` | `/api/v1/analysis/{reg}` | получить сохранённый анализ |
 
 ## Platform (каталог + UI)

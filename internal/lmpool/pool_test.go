@@ -65,14 +65,14 @@ func TestTryHoldExclusive(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	ctx1, release, ok := p.TryHold(ctx)
-	if !ok {
-		t.Fatal("first hold failed")
+	ctx1, release, err := p.Hold(ctx)
+	if err != nil {
+		t.Fatal(err)
 	}
 	defer release()
 
 	if _, _, ok := p.TryHold(ctx); ok {
-		t.Fatal("second hold must fail")
+		t.Fatal("second TryHold must fail while busy")
 	}
 
 	_, _, err = p.ChatMaxTokens(context.Background(), nil, 8)
@@ -100,4 +100,40 @@ func TestTryHoldExclusive(t *testing.T) {
 	if p.Status().Busy != 0 {
 		t.Fatal("busy leaked after release")
 	}
+}
+
+func TestHoldQueuesSecondCaller(t *testing.T) {
+	p, err := lmpool.Load("", lmstudio.Options{BaseURL: "http://127.0.0.1:1/v1", Model: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, release, err := p.Hold(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		_, _, e := p.Hold(ctx)
+		got <- e
+	}()
+
+	select {
+	case e := <-got:
+		if e == nil {
+			t.Fatal("second Hold should time out while first holds")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("second Hold did not return")
+	}
+	release()
+
+	ctx2, release2, err := p.Hold(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = ctx2
+	release2()
 }

@@ -203,11 +203,37 @@ DEFAULT_CHECKLIST=default
 
 ---
 
-## 10. Связка с Zakupki Platform
+## 10. Связка с Zakupki Platform / UI «Поисковики»
 
-Platform (`ZakupkiParser/platform`) хранит тексты документов в Postgres и вызывает:
+Поток UI (gateway searchers → search → core → analizator):
 
-`POST {ANALIZATOR_URL}/api/v1/analyze` с полем `text` (корпус из карточки + documents).
+1. Пользователь выбирает **настройку поиска** и включает `auto_ai` на неё.
+2. Поиск кладёт тендеры в core (`search_config_id`).
+3. Core обрабатывает документы; когда есть `text_content`, шлёт в analizator.
+4. Analizator работает в режиме **1 LLM / очередь**: параллельные запросы ждут слот
+   (`phase=queued` → `prepare` → `dose` → `synthesize` → `done`), не отдают 409 «занята»
+   (иначе UI рисует карточку как «ошибка / прочее»).
 
-Ответ сохраняется в `tender_assessments`; ручные чек-листы/промпты настраиваются здесь же (§4–5).
+Тело от core:
+
+```json
+{
+  "reg_number": "…",
+  "text": "корпус карточки + ### Документ: …",
+  "title": "…",
+  "checklist_id": "<ai_config uuid>",
+  "config_id": "<alias>",
+  "config_name": "…",
+  "system_prompt": "…",
+  "user_prompt": "…",
+  "rules": "…"
+}
+```
+
+Ответ для UI pills (`Да` / `Нет` / `С оговорками`):
+
+- `recommendation`: `participate|caution|skip|unknown`
+- `summary`: начинается с `Да:` / `Нет:` / `С оговорками:`
+- `risks`, `actions`, `items` — всегда массивы (не `null`)
+- прогресс: `GET /api/v1/analyze/progress/{reg}` → `percent`, `phase` (core пишет в `ai_pct`)
 

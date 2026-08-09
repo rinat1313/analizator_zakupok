@@ -225,29 +225,56 @@ func (p *Pool) Status() Status {
 	return st
 }
 
-// TryHold захватывает LLM на весь анализ. В ctx кладётся маркер владения —
-// ChatMaxTokens с этим ctx ходит в модель без повторного lock.
-// Второй процесс получит ok=false и не должен ничего отправлять.
+// TryHold — мгновенный захват. ok=false, если LLM уже занята (для smoke).
 func (p *Pool) TryHold(ctx context.Context) (context.Context, func(), bool) {
 	if !p.exclusive.TryLock() {
 		return ctx, nil, false
 	}
+	return p.afterLock(ctx), p.makeRelease(), true
+}
+
+// Hold ждёт эксклюзивный доступ (очередь для UI/auto-AI по поисковым настройкам).
+// Пока ждём — в LM Studio ничего не отправляется. Отмена ctx снимает ожидание.
+func (p *Pool) Hold(ctx context.Context) (context.Context, func(), error) {
+	if held, release, ok := p.TryHold(ctx); ok {
+		return held, release, nil
+	}
+	locked := make(chan struct{})
+	go func() {
+		p.exclusive.Lock()
+		close(locked)
+	}()
+	select {
+	case <-locked:
+		return p.afterLock(ctx), p.makeRelease(), nil
+	case <-ctx.Done():
+		go func() {
+			<-locked
+			p.exclusive.Unlock()
+		}()
+		return ctx, nil, fmt.Errorf("lmpool: ожидание LLM отменено: %w", ctx.Err())
+	}
+}
+
+func (p *Pool) afterLock(ctx context.Context) context.Context {
 	p.busy.Store(true)
-	ctx = context.WithValue(ctx, holdKey{}, p)
+	return context.WithValue(ctx, holdKey{}, p)
+}
+
+func (p *Pool) makeRelease() func() {
 	var once sync.Once
-	release := func() {
+	return func() {
 		once.Do(func() {
 			p.busy.Store(false)
 			p.exclusive.Unlock()
 		})
 	}
-	return ctx, release, true
 }
 
 // ChatMaxTokens отправляет запрос только если:
 //   - ctx уже под Hold (тот же анализ), или
 //   - удалось мгновенно взять эксклюзивный доступ (одиночный smoke).
-// Иначе — ошибка, в LM Studio ничего не уходит.
+// Иначе — ошибка, в LM Studio ничего не уходит (не встаём в очередь chat'ом).
 func (p *Pool) ChatMaxTokens(ctx context.Context, messages []lmstudio.Message, maxTokens int) (string, string, error) {
 	if owned, _ := ctx.Value(holdKey{}).(*Pool); owned == p {
 		return p.chat(ctx, messages, maxTokens)
