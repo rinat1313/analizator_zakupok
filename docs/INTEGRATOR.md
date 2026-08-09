@@ -51,11 +51,8 @@ go run ./cmd/analizator
 # или: docker compose up -d --build
 ```
 
-В Docker на том же хосте используйте:
-
-```env
-LM_STUDIO_BASE_URL=http://host.docker.internal:1234/v1
-```
+В Docker на том же хосте по умолчанию уже `http://127.0.0.1:1234/v1`
+и `network_mode: host` (см. `docker-compose.yml`).
 
 ### Вариант B — LM Studio на другом ПК в локальной сети (рекомендуется для «сервер с GPU»)
 
