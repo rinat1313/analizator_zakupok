@@ -1,0 +1,582 @@
+openapi: 3.0.3
+info:
+  title: analizator_zakupok API
+  description: |
+    REST API AI-ассистента анализа госзакупок.
+
+    Сервис читает данные тендера (карточка + документы / произвольный текст),
+    нарезает текст на порции (doses), отправляет в LM Studio и возвращает
+    рекомендацию по участию (participate / caution / skip) со сводкой, рисками и действиями.
+  version: 1.0.0
+  contact:
+    name: analizator_zakupok
+
+servers:
+  - url: http://127.0.0.1:8088
+    description: Local default
+  - url: /
+    description: Relative (same host)
+
+tags:
+  - name: health
+    description: Liveness и проверка LM Studio
+  - name: analysis
+    description: Запуск и получение анализа тендера
+  - name: checklists
+    description: Чек-листы оценки
+  - name: lm
+    description: Пул LM Studio и smoke-тест
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Liveness / состояние сервиса
+      description: |
+        Всегда возвращает базовый статус сервиса.
+        Чтобы пропинговать LM Studio, передайте `lm=1` или `deep=1`.
+      operationId: getHealth
+      parameters:
+        - name: lm
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ["1"]
+          description: Если `1` — выполнить Ping к LM Studio / пулу
+        - name: deep
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ["1"]
+          description: Синоним `lm=1`
+      responses:
+        "200":
+          description: Сервис жив
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              examples:
+                skipped:
+                  summary: Без проверки LM
+                  value:
+                    status: ok
+                    service: analizator_zakupok
+                    tenders_root: /data/tenders
+                    lm_base_url: http://127.0.0.1:1234/v1
+                    lm_model: local-model
+                    lm_studio: skipped
+                    lm_studio_hint: use GET /health?lm=1 to probe LM Studio
+                    time: "2026-08-09T01:00:00Z"
+                with_lm:
+                  summary: С проверкой LM
+                  value:
+                    status: ok
+                    service: analizator_zakupok
+                    lm_studio: ok
+                    lm_max_parallel: 2
+                    time: "2026-08-09T01:00:00Z"
+
+  /api/v1/checklists:
+    get:
+      tags: [checklists]
+      summary: Список доступных чек-листов
+      description: Возвращает идентификаторы YAML-чек-листов из `CHECKLISTS_DIR`.
+      operationId: listChecklists
+      responses:
+        "200":
+          description: Список id чек-листов
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChecklistsResponse"
+              example:
+                checklists: [default, quick]
+        "500":
+          $ref: "#/components/responses/Error"
+
+  /api/v1/analyze:
+    post:
+      tags: [analysis]
+      summary: Запустить анализ
+      description: |
+        Нужен хотя бы один из источников:
+        - `reg_number` — анализ тендера из `TENDERS_ROOT/{reg}/` (valid_info / valid_doc)
+        - `text` — произвольный корпус (например, из PostgreSQL платформы)
+
+        Можно передать оба: текст корпуса + доп. файлы с диска по `reg_number`.
+
+        Опционально переопределяются system/user промпты и правила.
+      operationId: analyze
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnalyzeRequest"
+            examples:
+              by_reg:
+                summary: Анализ по регномеру
+                value:
+                  reg_number: "0334500000125000001"
+                  checklist_id: default
+              by_text:
+                summary: Анализ произвольного текста
+                value:
+                  title: Поставка бумаги А4
+                  checklist_id: quick
+                  text: >
+                    Извещение о закупке. Предмет: бумага офисная А4.
+                    НМЦК: 500 000 руб. Срок подачи заявок: 5 рабочих дней.
+              custom_prompts:
+                summary: С кастомными промптами
+                value:
+                  reg_number: "0334500000125000001"
+                  config_name: samozanyaty
+                  user_prompt: Оцени закупку по возможности участия самозанятого
+                  system_prompt: Ты эксперт по 44-ФЗ. Отвечай строго JSON.
+                  rules: Самозанятый не может участвовать при требовании юрлица.
+      responses:
+        "200":
+          description: Результат анализа (completed / failed / running snapshot)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalysisResult"
+        "400":
+          description: Невалидный JSON или нет reg_number/text
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                missing_source:
+                  value:
+                    error: reg_number or text is required
+        "500":
+          $ref: "#/components/responses/Error"
+
+  /api/v1/analyze/progress/{reg}:
+    get:
+      tags: [analysis]
+      summary: Прогресс дозированного анализа
+      description: |
+        Процент и фаза текущего анализа по регномеру.
+        Если анализ не идёт — `phase=idle`, проценты нулевые.
+      operationId: getAnalyzeProgress
+      parameters:
+        - $ref: "#/components/parameters/RegPath"
+      responses:
+        "200":
+          description: Текущий прогресс
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalyzeProgress"
+              examples:
+                running:
+                  value:
+                    reg_number: "0334500000125000001"
+                    percent: 45
+                    doses_done: 5
+                    doses_total: 12
+                    phase: dose
+                idle:
+                  value:
+                    reg_number: "0334500000125000001"
+                    percent: 0
+                    doses_done: 0
+                    doses_total: 0
+                    phase: idle
+        "400":
+          $ref: "#/components/responses/Error"
+
+  /api/v1/analysis/{reg}:
+    get:
+      tags: [analysis]
+      summary: Получить сохранённый анализ
+      description: Читает `analysis/analysis.json` (и опционально запись из PostgreSQL).
+      operationId: getAnalysis
+      parameters:
+        - $ref: "#/components/parameters/RegPath"
+      responses:
+        "200":
+          description: Сохранённый результат
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalysisResult"
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          description: Анализ не найден
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/lm/pool:
+    get:
+      tags: [lm]
+      summary: Статус пула LM Studio
+      description: |
+        Количество endpoint'ов, здоровые/занятые, max_parallel.
+        Если пул не сконфигурирован — один synthetic endpoint `default`.
+      operationId: getLMPool
+      responses:
+        "200":
+          description: Статус пула
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LMPoolStatus"
+
+  /api/v1/lm/smoke:
+    post:
+      tags: [lm]
+      summary: Smoke-тест вызова LM Studio
+      description: Короткий chat/completions запрос («Скажи: ок») для проверки связности.
+      operationId: lmSmoke
+      responses:
+        "200":
+          description: LM ответил
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LMSmokeOK"
+              example:
+                ok: true
+                model: local-model
+                content: ок
+                lm_url: http://127.0.0.1:1234/v1
+        "502":
+          description: LM недоступен или ошибка ответа
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LMSmokeFail"
+
+  /openapi.yaml:
+    get:
+      tags: [health]
+      summary: OpenAPI спецификация (YAML)
+      operationId: getOpenAPI
+      responses:
+        "200":
+          description: OpenAPI 3.0 YAML
+          content:
+            application/yaml:
+              schema:
+                type: string
+
+  /swagger:
+    get:
+      tags: [health]
+      summary: Swagger UI (редирект)
+      operationId: swaggerRedirect
+      responses:
+        "302":
+          description: Redirect на /swagger/
+
+  /swagger/:
+    get:
+      tags: [health]
+      summary: Swagger UI
+      operationId: swaggerUI
+      responses:
+        "200":
+          description: HTML страница Swagger UI
+          content:
+            text/html:
+              schema:
+                type: string
+
+components:
+  parameters:
+    RegPath:
+      name: reg
+      in: path
+      required: true
+      description: Реестровый номер закупки (или id анализа для text-only)
+      schema:
+        type: string
+      example: "0334500000125000001"
+
+  responses:
+    Error:
+      description: Ошибка
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+
+    AnalyzeRequest:
+      type: object
+      description: |
+        Хотя бы одно из полей `reg_number` или `text` обязательно.
+        Неизвестные поля отклоняются (`DisallowUnknownFields`).
+      properties:
+        reg_number:
+          type: string
+          description: Реестровый номер тендера в каталоге парсера
+          example: "0334500000125000001"
+        text:
+          type: string
+          description: Произвольный корпус документов (основной путь для platform/PostgreSQL)
+        checklist_id:
+          type: string
+          description: Id чек-листа / метка конфигурации
+          example: default
+        title:
+          type: string
+          description: Заголовок закупки (опционально)
+        config_name:
+          type: string
+          description: Человекочитаемое имя конфигурации анализа
+        system_prompt:
+          type: string
+          description: Переопределение system-промпта для анализа порций
+        user_prompt:
+          type: string
+          description: Фокусный вопрос анализа (вместо дефолтного)
+        rules:
+          type: string
+          description: Дополнительные правила, дописываются к system-промпту
+
+    ItemResult:
+      type: object
+      properties:
+        id:
+          type: string
+          example: dose-3
+        title:
+          type: string
+        status:
+          type: string
+          enum: [ok, warn, fail, unknown, neutral]
+        score:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+        findings:
+          type: string
+        evidence:
+          type: array
+          items:
+            type: string
+        chunk_ids:
+          type: array
+          items:
+            type: string
+
+    AnalysisResult:
+      type: object
+      properties:
+        reg_number:
+          type: string
+        law:
+          type: string
+          description: Закон закупки (44-ФЗ / 223-ФЗ), если известен
+        status:
+          type: string
+          enum: [pending, running, completed, failed]
+        checklist_id:
+          type: string
+        checklist_name:
+          type: string
+        model:
+          type: string
+          description: Идентификатор модели LM Studio
+        recommendation:
+          type: string
+          enum: [participate, caution, skip, unknown]
+          description: Итоговая рекомендация по участию
+        score:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+        summary:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ItemResult"
+        risks:
+          type: array
+          items:
+            type: string
+        actions:
+          type: array
+          items:
+            type: string
+        sources_used:
+          type: array
+          items:
+            type: string
+        chunks_total:
+          type: integer
+          description: Всего порций (doses) текста
+        chunks_used:
+          type: integer
+          description: Сколько порций реально проанализировано
+        error:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        analyzed_at:
+          type: string
+          format: date-time
+        raw_synthesize:
+          type: string
+          description: Сырой ответ модели на этапе синтеза
+      example:
+        reg_number: "0334500000125000001"
+        status: completed
+        checklist_id: default
+        recommendation: caution
+        score: 0.62
+        summary: Есть риски по обеспечению и срокам для самозанятого.
+        items:
+          - id: dose-1
+            title: Порция 1
+            status: warn
+            score: 0.55
+            findings: Требуется обеспечение заявки 5%.
+        risks:
+          - Обеспечение заявки может быть недоступно самозанятому
+        actions:
+          - Уточнить возможность обеспечения у заказчика
+        chunks_total: 12
+        chunks_used: 12
+
+    AnalyzeProgress:
+      type: object
+      properties:
+        reg_number:
+          type: string
+        percent:
+          type: integer
+          minimum: 0
+          maximum: 100
+        doses_done:
+          type: integer
+        doses_total:
+          type: integer
+        phase:
+          type: string
+          description: "idle | prepare | dose | synthesize | done (и др.)"
+          example: dose
+
+    ChecklistsResponse:
+      type: object
+      required: [checklists]
+      properties:
+        checklists:
+          type: array
+          items:
+            type: string
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        service:
+          type: string
+          example: analizator_zakupok
+        tenders_root:
+          type: string
+        lm_base_url:
+          type: string
+        lm_model:
+          type: string
+        lm_studio:
+          type: string
+          description: ok | unavailable | skipped
+        lm_studio_error:
+          type: string
+        lm_studio_hint:
+          type: string
+        lm_pool:
+          $ref: "#/components/schemas/LMPoolStatus"
+        lm_max_parallel:
+          type: integer
+        time:
+          type: string
+          format: date-time
+
+    LMEndpointStatus:
+      type: object
+      properties:
+        name:
+          type: string
+        base_url:
+          type: string
+        model:
+          type: string
+        healthy:
+          type: boolean
+        busy:
+          type: boolean
+        error:
+          type: string
+
+    LMPoolStatus:
+      type: object
+      properties:
+        total:
+          type: integer
+        healthy:
+          type: integer
+        busy:
+          type: integer
+        available:
+          type: integer
+        max_parallel:
+          type: integer
+        endpoints:
+          type: array
+          items:
+            $ref: "#/components/schemas/LMEndpointStatus"
+
+    LMSmokeOK:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          example: true
+        model:
+          type: string
+        content:
+          type: string
+        lm_url:
+          type: string
+
+    LMSmokeFail:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          example: false
+        error:
+          type: string
+        lm_url:
+          type: string
+        model:
+          type: string
+        expect:
+          type: string

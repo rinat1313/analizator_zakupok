@@ -156,12 +156,20 @@ YAML в `configs/checklists/`:
 
 ## API
 
+Интерактивная документация (Swagger UI): [http://127.0.0.1:8088/swagger/](http://127.0.0.1:8088/swagger/)  
+Спецификация OpenAPI 3.0: [`docs/openapi.yaml`](docs/openapi.yaml) → `GET /openapi.yaml`
+
 | Метод | Путь | Описание |
 |-------|------|----------|
-| `GET` | `/health` | liveness + ping LM Studio |
+| `GET` | `/health` | liveness (+ `?lm=1` — ping LM Studio) |
 | `GET` | `/api/v1/checklists` | список чек-листов |
 | `POST` | `/api/v1/analyze` | запуск анализа (очередь на 1 LLM; промпты из UI/core) |
+| `GET` | `/api/v1/analyze/progress/{reg}` | прогресс дозированного анализа |
 | `GET` | `/api/v1/analysis/{reg}` | получить сохранённый анализ |
+| `GET` | `/api/v1/lm/pool` | статус пула LM Studio |
+| `POST` | `/api/v1/lm/smoke` | smoke-тест вызова LM |
+| `GET` | `/swagger/` | Swagger UI |
+| `GET` | `/openapi.yaml` | OpenAPI спецификация |
 
 ## Platform (каталог + UI)
 

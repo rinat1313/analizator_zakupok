@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/rinat1313/analizator_zakupok/internal/analyzer"
@@ -56,6 +57,26 @@ func TestHealthAndChecklists(t *testing.T) {
 	}
 	if _, ok := body["checklists"]; !ok {
 		t.Fatalf("body=%v", body)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/openapi.yaml", nil)
+	rr = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("openapi code=%d", rr.Code)
+	}
+	if !bytes.Contains(rr.Body.Bytes(), []byte("openapi:")) {
+		t.Fatalf("openapi body missing openapi header")
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/swagger/", nil)
+	rr = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("swagger code=%d", rr.Code)
+	}
+	if ct := rr.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
+		t.Fatalf("swagger content-type=%q", ct)
 	}
 }
 
