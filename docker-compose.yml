@@ -1,12 +1,11 @@
-# Автономный запуск analizator_zakupok.
+# Автономный запуск analizator_zakupok (отдельный сервис).
 #
-# По умолчанию LM Studio на локальной машине: http://127.0.0.1:1234/v1
-# (сервис в Docker идёт в host-network, чтобы достучаться до localhost хоста).
+# LM Studio на ЭТОЙ же машине (порт 1234):
+#   из контейнера → http://host.docker.internal:1234/v1
+#   локально go run → http://127.0.0.1:1234/v1 (см. .env.example)
 #
-# LM Studio в локальной сети (другой ПК):
-#   export LM_STUDIO_BASE_URL=http://192.168.1.50:1234/v1
-#   export LM_STUDIO_MODEL=<id модели из LM Studio>
-#   docker compose up -d --build
+# Платформа (zakupki-platform ./up.sh --ai) поднимает этот же образ
+# и задаёт core ANALIZATOR_URL=http://analizator:8088.
 
 services:
   postgres:
@@ -29,8 +28,8 @@ services:
 
   analizator:
     build: .
-    # host network: 127.0.0.1:1234 = LM Studio на этой же машине; API на :8088 хоста
-    network_mode: host
+    ports:
+      - "8088:8088"
     env_file:
       - path: .env
         required: false
@@ -40,7 +39,8 @@ services:
       CHECKLISTS_DIR: /app/configs/checklists
       PROMPTS_DIR: /app/configs/prompts
       DEFAULT_CHECKLIST: ${DEFAULT_CHECKLIST:-default}
-      LM_STUDIO_BASE_URL: ${LM_STUDIO_BASE_URL:-http://127.0.0.1:1234/v1}
+      # Docker → LM Studio на хосте. Не используйте 127.0.0.1 внутри контейнера.
+      LM_STUDIO_BASE_URL: ${LM_STUDIO_BASE_URL:-http://host.docker.internal:1234/v1}
       LM_STUDIO_API_KEY: ${LM_STUDIO_API_KEY:-lm-studio}
       LM_STUDIO_MODEL: ${LM_STUDIO_MODEL:-local-model}
       LM_STUDIO_TIMEOUT: ${LM_STUDIO_TIMEOUT:-5m}
@@ -48,12 +48,17 @@ services:
       CHUNK_OVERLAP: ${CHUNK_OVERLAP:-250}
       MAX_CHUNKS: ${MAX_CHUNKS:-40}
       CONCURRENCY: ${CONCURRENCY:-1}
-      # Раскомментируйте вместе с profile db (тогда уберите network_mode: host):
-      # DATABASE_URL: postgres://zakupki:zakupki@127.0.0.1:5432/zakupki?sslmode=disable
     volumes:
       - ${TENDERS_HOST_PATH:-tenders_data}:/data/tenders
-      # правки чек-листов/промптов без пересборки образа:
       - ./configs:/app/configs:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8088/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
 
 volumes:
   pgdata:

@@ -138,6 +138,23 @@ func pickSingleEndpoint(fromFile []EndpointConfig, fallback lmstudio.Options) (E
 		return ep
 	}
 
+	// Явный LM_STUDIO_BASE_URL (Docker/platform ENV) побеждает yaml.
+	if v, ok := os.LookupEnv("LM_STUDIO_BASE_URL"); ok && strings.TrimSpace(v) != "" {
+		return normalize(EndpointConfig{
+			Name:    "default",
+			BaseURL: v,
+			APIKey:  fallback.APIKey,
+			Model:   fallback.Model,
+		}), nil
+	}
+	// Иначе — первый endpoint из yaml (локальный go run → 127.0.0.1).
+	if len(fromFile) > 0 {
+		ep := normalize(fromFile[0])
+		if ep.BaseURL == "" {
+			return EndpointConfig{}, fmt.Errorf("lmpool: empty base_url in configs/lm_studio.yaml")
+		}
+		return ep, nil
+	}
 	if strings.TrimSpace(fallback.BaseURL) != "" {
 		return normalize(EndpointConfig{
 			Name:    "default",
@@ -145,13 +162,6 @@ func pickSingleEndpoint(fromFile []EndpointConfig, fallback lmstudio.Options) (E
 			APIKey:  fallback.APIKey,
 			Model:   fallback.Model,
 		}), nil
-	}
-	if len(fromFile) > 0 {
-		ep := normalize(fromFile[0])
-		if ep.BaseURL == "" {
-			return EndpointConfig{}, fmt.Errorf("lmpool: empty base_url in configs/lm_studio.yaml")
-		}
-		return ep, nil
 	}
 	return EndpointConfig{}, fmt.Errorf("lmpool: no LM Studio endpoint configured (LM_STUDIO_BASE_URL or configs/lm_studio.yaml)")
 }

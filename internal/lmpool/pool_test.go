@@ -13,6 +13,7 @@ import (
 )
 
 func TestLoadSingleEndpointIgnoresExtras(t *testing.T) {
+	t.Setenv("LM_STUDIO_BASE_URL", "")
 	dir := t.TempDir()
 	path := filepath.Join(dir, "lm.yaml")
 	content := []byte(`
@@ -44,6 +45,7 @@ health_interval_sec: 30
 		t.Fatalf("base=%s", p.BaseURL())
 	}
 
+	t.Setenv("LM_STUDIO_BASE_URL", "http://10.0.0.5:1234/v1")
 	p2, err := lmpool.Load(path, lmstudio.Options{
 		BaseURL: "http://10.0.0.5:1234/v1",
 		Model:   "env-model",
